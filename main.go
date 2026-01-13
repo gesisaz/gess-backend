@@ -1,13 +1,17 @@
 package main
 
 import (
+	"auth-demo/database"
+	"auth-demo/models"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/google/uuid"
 	"github.com/rs/cors"
 )
 
@@ -30,18 +34,31 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Simple mock authentication
-	// TODO: Implement actual authentication logic
-	if creds.Username != "admin" || creds.Password != "password" {
+	// Query user from database
+	var user models.User
+	query := `SELECT id, username, email, password_hash, created_at, updated_at 
+	          FROM users WHERE username = $1 OR email = $1`
+	err := database.DB.QueryRow(query, creds.Username).Scan(
+		&user.ID, &user.Username, &user.Email, &user.PasswordHash, 
+		&user.CreatedAt, &user.UpdatedAt,
+	)
+	if err != nil {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
 
-	expirationTime := time.Now().Add(5 * time.Minute)
+	// Check password
+	if !user.CheckPassword(creds.Password) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	expirationTime := time.Now().Add(24 * time.Hour)
 	claims := &Claims{
-		Username: creds.Username,
+		Username: user.Username,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(expirationTime),
+			Subject:   user.ID.String(),
 		},
 	}
 
@@ -57,8 +74,8 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 		Value:    tokenString,
 		Expires:  expirationTime,
 		HttpOnly: true,
-		SameSite: http.SameSiteNoneMode, // required for cross-site requests
-		Secure:   true,                  // must be true on HTTPS
+		SameSite: http.SameSiteNoneMode,
+		Secure:   true,
 		Path:     "/",
 	})
 
@@ -89,7 +106,6 @@ func protectedHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func logoutHandler(w http.ResponseWriter, r *http.Request) {
-	// Invalidate the cookie by setting an expired date
 	http.SetCookie(w, &http.Cookie{
 		Name:     "token",
 		Value:    "",
@@ -102,20 +118,76 @@ func logoutHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"message": "logged out"})
 }
 
+func registerHandler(w http.ResponseWriter, r *http.Request) {
+	var creds Credentials
+	if err := json.NewDecoder(r.Body).Decode(&creds); err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+
+	// Validate input
+	if creds.Username == "" || creds.Password == "" {
+		http.Error(w, "username and password required", http.StatusBadRequest)
+		return
+	}
+
+	// Hash password
+	hashedPassword, err := models.HashPassword(creds.Password)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	// Insert user into database
+	var userID uuid.UUID
+	query := `INSERT INTO users (username, email, password_hash) 
+	          VALUES ($1, $2, $3) RETURNING id`
+	err = database.DB.QueryRow(query, creds.Username, creds.Username+"@example.com", hashedPassword).Scan(&userID)
+	if err != nil {
+		http.Error(w, "username already exists", http.StatusConflict)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"message": "user created successfully",
+		"user_id": userID.String(),
+	})
+}
+
 func main() {
+	// Initialize database connection
+	if err := database.ConnectDB(); err != nil {
+		log.Fatal("Failed to connect to database:", err)
+	}
+	defer database.Close()
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("/login", loginHandler)
+	mux.HandleFunc("/register", registerHandler)
 	mux.HandleFunc("/protected", protectedHandler)
 	mux.HandleFunc("/logout", logoutHandler)
 
-	// For now, allow all CORS (we’ll tighten later)
+	// Configure CORS
+	allowedOrigin := os.Getenv("BASE_URL")
+	if allowedOrigin == "" {
+		allowedOrigin = "http://localhost:3000"
+	}
+
 	handler := cors.New(cors.Options{
-		AllowedOrigins:   []string{os.Getenv("BASE_URL")},
+		AllowedOrigins:   []string{allowedOrigin},
 		AllowCredentials: true,
-		AllowedMethods:   []string{"GET", "POST", "DELETE"},
-		AllowedHeaders:   []string{"Content-Type"},
+		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+		AllowedHeaders:   []string{"Content-Type", "Authorization"},
 	}).Handler(mux)
 
-	fmt.Println("Server running on :8080")
-	http.ListenAndServe(":8080", handler)
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
+
+	log.Printf("Server running on :%s\n", port)
+	if err := http.ListenAndServe(":"+port, handler); err != nil {
+		log.Fatal("Server failed to start:", err)
+	}
 }
