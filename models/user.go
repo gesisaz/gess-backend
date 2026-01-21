@@ -7,13 +7,27 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
+type UserRole string
+
+const (
+	UserRoleUser       UserRole = "user"
+	UserRoleAdmin      UserRole = "admin"
+	UserRoleSuperAdmin UserRole = "super_admin"
+)
+
 type User struct {
 	ID           uuid.UUID `json:"id" db:"id"`
 	Username     string    `json:"username" db:"username"`
 	Email        string    `json:"email" db:"email"`
 	PasswordHash string    `json:"-" db:"password_hash"`
+	Role         UserRole  `json:"role" db:"role"`
 	CreatedAt    time.Time `json:"created_at" db:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at" db:"updated_at"`
+}
+
+// IsAdmin checks if user has admin privileges
+func (u *User) IsAdmin() bool {
+	return u.Role == UserRoleAdmin || u.Role == UserRoleSuperAdmin
 }
 
 // HashPassword hashes a plain text password

@@ -15,7 +15,7 @@ var DB *sql.DB
 func ConnectDB() error {
 	databaseURL := os.Getenv("DATABASE_URL")
 	if databaseURL == "" {
-		log.Fatal("DATABASE_URL environment variable is not set")
+		return fmt.Errorf("DATABASE_URL environment variable is not set")
 	}
 
 	db, err := sql.Open("postgres", databaseURL)

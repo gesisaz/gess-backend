@@ -2,6 +2,7 @@ package main
 
 import (
 	"auth-demo/database"
+	"auth-demo/middleware"
 	"auth-demo/models"
 	"encoding/json"
 	"fmt"
@@ -15,7 +16,16 @@ import (
 	"github.com/rs/cors"
 )
 
-var jwtKey = []byte("supersecretkey") // for demo
+var jwtKey []byte
+
+func init() {
+	jwtSecret := os.Getenv("JWT_SECRET")
+	if jwtSecret == "" {
+		jwtKey = []byte("supersecretkey") // fallback for demo
+	} else {
+		jwtKey = []byte(jwtSecret)
+	}
+}
 
 type Credentials struct {
 	Username string `json:"username"`
@@ -34,13 +44,13 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Query user from database
+	// Query user from database (including role)
 	var user models.User
-	query := `SELECT id, username, email, password_hash, created_at, updated_at 
+	query := `SELECT id, username, email, password_hash, role, created_at, updated_at 
 	          FROM users WHERE username = $1 OR email = $1`
 	err := database.DB.QueryRow(query, creds.Username).Scan(
 		&user.ID, &user.Username, &user.Email, &user.PasswordHash, 
-		&user.CreatedAt, &user.UpdatedAt,
+		&user.Role, &user.CreatedAt, &user.UpdatedAt,
 	)
 	if err != nil {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -80,28 +90,51 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 	})
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"token": tokenString})
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"token": tokenString,
+		"user": map[string]interface{}{
+			"id":       user.ID,
+			"username": user.Username,
+			"email":    user.Email,
+			"role":     user.Role,
+		},
+	})
 }
 
 func protectedHandler(w http.ResponseWriter, r *http.Request) {
-	cookie, err := r.Cookie("token")
-	if err != nil {
-		http.Error(w, "missing cookie", http.StatusUnauthorized)
+	user, ok := middleware.GetUserFromContext(r)
+	if !ok {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
 
-	claims := &Claims{}
-	tkn, err := jwt.ParseWithClaims(cookie.Value, claims, func(t *jwt.Token) (interface{}, error) {
-		return jwtKey, nil
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"message": fmt.Sprintf("Welcome, %s!", user.Username),
+		"user": map[string]interface{}{
+			"id":       user.ID,
+			"username": user.Username,
+			"email":    user.Email,
+			"role":     user.Role,
+		},
 	})
+}
 
-	if err != nil || !tkn.Valid {
-		http.Error(w, "invalid token", http.StatusUnauthorized)
+func adminDashboardHandler(w http.ResponseWriter, r *http.Request) {
+	user, ok := middleware.GetUserFromContext(r)
+	if !ok {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
 
-	json.NewEncoder(w).Encode(map[string]string{
-		"message": fmt.Sprintf("Welcome, %s!", claims.Username),
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"message": fmt.Sprintf("Welcome to admin dashboard, %s!", user.Username),
+		"user": map[string]interface{}{
+			"id":       user.ID,
+			"username": user.Username,
+			"role":     user.Role,
+		},
 	})
 }
 
@@ -118,21 +151,42 @@ func logoutHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"message": "logged out"})
 }
 
+type RegisterRequest struct {
+	Username string          `json:"username"`
+	Email    string          `json:"email"`
+	Password string          `json:"password"`
+	Role     models.UserRole `json:"role,omitempty"` // Optional, only admins can set this
+}
+
 func registerHandler(w http.ResponseWriter, r *http.Request) {
-	var creds Credentials
-	if err := json.NewDecoder(r.Body).Decode(&creds); err != nil {
+	var req RegisterRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
 
 	// Validate input
-	if creds.Username == "" || creds.Password == "" {
+	if req.Username == "" || req.Password == "" {
 		http.Error(w, "username and password required", http.StatusBadRequest)
 		return
 	}
 
+	// Set default email if not provided
+	if req.Email == "" {
+		req.Email = req.Username + "@example.com"
+	}
+
+	// Default role is 'user', unless specified (would need admin check for that)
+	if req.Role == "" {
+		req.Role = models.UserRoleUser
+	} else {
+		// TODO: Only allow admins to set custom roles
+		// For now, force role to 'user' for security
+		req.Role = models.UserRoleUser
+	}
+
 	// Hash password
-	hashedPassword, err := models.HashPassword(creds.Password)
+	hashedPassword, err := models.HashPassword(req.Password)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -140,18 +194,23 @@ func registerHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Insert user into database
 	var userID uuid.UUID
-	query := `INSERT INTO users (username, email, password_hash) 
-	          VALUES ($1, $2, $3) RETURNING id`
-	err = database.DB.QueryRow(query, creds.Username, creds.Username+"@example.com", hashedPassword).Scan(&userID)
+	query := `INSERT INTO users (username, email, password_hash, role) 
+	          VALUES ($1, $2, $3, $4) RETURNING id`
+	err = database.DB.QueryRow(query, req.Username, req.Email, hashedPassword, req.Role).Scan(&userID)
 	if err != nil {
-		http.Error(w, "username already exists", http.StatusConflict)
+		http.Error(w, "username or email already exists", http.StatusConflict)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{
+	json.NewEncoder(w).Encode(map[string]interface{}{
 		"message": "user created successfully",
-		"user_id": userID.String(),
+		"user": map[string]interface{}{
+			"id":       userID.String(),
+			"username": req.Username,
+			"email":    req.Email,
+			"role":     req.Role,
+		},
 	})
 }
 
@@ -163,10 +222,17 @@ func main() {
 	defer database.Close()
 
 	mux := http.NewServeMux()
+	
+	// Public routes
 	mux.HandleFunc("/login", loginHandler)
 	mux.HandleFunc("/register", registerHandler)
-	mux.HandleFunc("/protected", protectedHandler)
 	mux.HandleFunc("/logout", logoutHandler)
+	
+	// User routes (authenticated)
+	mux.HandleFunc("/protected", middleware.AuthMiddleware(protectedHandler))
+	
+	// Admin routes (authenticated + admin role)
+	mux.HandleFunc("/admin/dashboard", middleware.AdminMiddleware(adminDashboardHandler))
 
 	// Configure CORS
 	allowedOrigin := os.Getenv("BASE_URL")
