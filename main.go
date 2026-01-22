@@ -2,6 +2,7 @@ package main
 
 import (
 	"auth-demo/database"
+	"auth-demo/handlers"
 	"auth-demo/middleware"
 	"auth-demo/models"
 	"encoding/json"
@@ -223,16 +224,82 @@ func main() {
 
 	mux := http.NewServeMux()
 	
-	// Public routes
+	// Public routes - Authentication
 	mux.HandleFunc("/login", loginHandler)
 	mux.HandleFunc("/register", registerHandler)
 	mux.HandleFunc("/logout", logoutHandler)
 	
+	// Public routes - Products & Categories (no auth required)
+	mux.HandleFunc("/products", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			handlers.ListProductsHandler(w, r)
+		} else {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
+	})
+	mux.HandleFunc("/products/", handlers.GetProductHandler)
+	mux.HandleFunc("/categories", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			handlers.ListCategoriesHandler(w, r)
+		} else {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
+	})
+	mux.HandleFunc("/categories/", handlers.GetCategoryHandler)
+	
 	// User routes (authenticated)
 	mux.HandleFunc("/protected", middleware.AuthMiddleware(protectedHandler))
 	
-	// Admin routes (authenticated + admin role)
+	// Admin routes - Dashboard
 	mux.HandleFunc("/admin/dashboard", middleware.AdminMiddleware(adminDashboardHandler))
+	
+	// Admin routes - Product Management
+	mux.HandleFunc("/admin/products", middleware.AdminMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPost:
+			handlers.CreateProductHandler(w, r)
+		case http.MethodGet:
+			handlers.ListProductsHandler(w, r)
+		default:
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
+	}))
+	mux.HandleFunc("/admin/products/", middleware.AdminMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPut:
+			handlers.UpdateProductHandler(w, r)
+		case http.MethodDelete:
+			handlers.DeleteProductHandler(w, r)
+		case http.MethodGet:
+			handlers.GetProductHandler(w, r)
+		default:
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
+	}))
+	
+	// Admin routes - Category Management
+	mux.HandleFunc("/admin/categories", middleware.AdminMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPost:
+			handlers.CreateCategoryHandler(w, r)
+		case http.MethodGet:
+			handlers.ListCategoriesHandler(w, r)
+		default:
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
+	}))
+	mux.HandleFunc("/admin/categories/", middleware.AdminMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPut:
+			handlers.UpdateCategoryHandler(w, r)
+		case http.MethodDelete:
+			handlers.DeleteCategoryHandler(w, r)
+		case http.MethodGet:
+			handlers.GetCategoryHandler(w, r)
+		default:
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
+	}))
 
 	// Configure CORS
 	allowedOrigin := os.Getenv("BASE_URL")
