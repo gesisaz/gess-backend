@@ -246,6 +246,14 @@ func main() {
 		}
 	})
 	mux.HandleFunc("/categories/", handlers.GetCategoryHandler)
+	mux.HandleFunc("/brands", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			handlers.ListBrandsHandler(w, r)
+		} else {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
+	})
+	mux.HandleFunc("/brands/", handlers.GetBrandHandler)
 	
 	// User routes (authenticated)
 	mux.HandleFunc("/protected", middleware.AuthMiddleware(protectedHandler))
@@ -296,6 +304,30 @@ func main() {
 			handlers.DeleteCategoryHandler(w, r)
 		case http.MethodGet:
 			handlers.GetCategoryHandler(w, r)
+		default:
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
+	}))
+	
+	// Admin routes - Brand Management
+	mux.HandleFunc("/admin/brands", middleware.AdminMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPost:
+			handlers.CreateBrandHandler(w, r)
+		case http.MethodGet:
+			handlers.ListBrandsHandler(w, r)
+		default:
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
+	}))
+	mux.HandleFunc("/admin/brands/", middleware.AdminMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPut:
+			handlers.UpdateBrandHandler(w, r)
+		case http.MethodDelete:
+			handlers.DeleteBrandHandler(w, r)
+		case http.MethodGet:
+			handlers.GetBrandHandler(w, r)
 		default:
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		}
