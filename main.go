@@ -10,6 +10,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -237,7 +238,23 @@ func main() {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		}
 	})
-	mux.HandleFunc("/products/", handlers.GetProductHandler)
+	mux.HandleFunc("/products/", func(w http.ResponseWriter, r *http.Request) {
+		pathParts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+		if len(pathParts) >= 3 && pathParts[len(pathParts)-1] == "reviews" {
+			// /products/:id/reviews
+			switch r.Method {
+			case http.MethodGet:
+				handlers.ListProductReviewsHandler(w, r)
+			case http.MethodPost:
+				middleware.AuthMiddleware(handlers.CreateReviewHandler)(w, r)
+			default:
+				http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			}
+		} else {
+			// /products/:id (existing handler)
+			handlers.GetProductHandler(w, r)
+		}
+	})
 	mux.HandleFunc("/categories", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet {
 			handlers.ListCategoriesHandler(w, r)
@@ -257,6 +274,106 @@ func main() {
 	
 	// User routes (authenticated)
 	mux.HandleFunc("/protected", middleware.AuthMiddleware(protectedHandler))
+	
+	// Cart routes (authenticated)
+	mux.HandleFunc("/cart", middleware.AuthMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			handlers.GetCartHandler(w, r)
+		case http.MethodDelete:
+			handlers.ClearCartHandler(w, r)
+		default:
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
+	}))
+	mux.HandleFunc("/cart/items", middleware.AuthMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			handlers.AddCartItemHandler(w, r)
+		} else {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
+	}))
+	mux.HandleFunc("/cart/items/", middleware.AuthMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPut:
+			handlers.UpdateCartItemHandler(w, r)
+		case http.MethodDelete:
+			handlers.DeleteCartItemHandler(w, r)
+		default:
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
+	}))
+	
+	// Address routes (authenticated)
+	mux.HandleFunc("/addresses", middleware.AuthMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			handlers.ListAddressesHandler(w, r)
+		case http.MethodPost:
+			handlers.CreateAddressHandler(w, r)
+		default:
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
+	}))
+	mux.HandleFunc("/addresses/", middleware.AuthMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		pathParts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+		if len(pathParts) >= 3 && pathParts[len(pathParts)-1] == "default" {
+			// POST /addresses/:id/default
+			if r.Method == http.MethodPost {
+				handlers.SetDefaultAddressHandler(w, r)
+			} else {
+				http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			}
+		} else {
+			// PUT /addresses/:id or DELETE /addresses/:id
+			switch r.Method {
+			case http.MethodPut:
+				handlers.UpdateAddressHandler(w, r)
+			case http.MethodDelete:
+				handlers.DeleteAddressHandler(w, r)
+			default:
+				http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			}
+		}
+	}))
+	
+	// Order routes (authenticated)
+	mux.HandleFunc("/orders", middleware.AuthMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			handlers.ListOrdersHandler(w, r)
+		case http.MethodPost:
+			handlers.CreateOrderHandler(w, r)
+		default:
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
+	}))
+	mux.HandleFunc("/orders/", middleware.AuthMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			handlers.GetOrderHandler(w, r)
+		} else {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
+	}))
+	
+	// Review routes
+	mux.HandleFunc("/reviews/me", middleware.AuthMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			handlers.ListUserReviewsHandler(w, r)
+		} else {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
+	}))
+	mux.HandleFunc("/reviews/", middleware.AuthMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPut:
+			handlers.UpdateReviewHandler(w, r)
+		case http.MethodDelete:
+			handlers.DeleteReviewHandler(w, r)
+		default:
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
+	}))
 	
 	// Admin routes - Dashboard
 	mux.HandleFunc("/admin/dashboard", middleware.AdminMiddleware(adminDashboardHandler))
@@ -320,7 +437,7 @@ func main() {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		}
 	}))
-	mux.HandleFunc("/admin/brands/", middleware.AdminMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		mux.HandleFunc("/admin/brands/", middleware.AdminMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodPut:
 			handlers.UpdateBrandHandler(w, r)
@@ -329,6 +446,28 @@ func main() {
 		case http.MethodGet:
 			handlers.GetBrandHandler(w, r)
 		default:
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
+	}))
+	
+	// Admin routes - Order Management
+	mux.HandleFunc("/admin/orders", middleware.AdminMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet {
+			handlers.ListAllOrdersHandler(w, r)
+		} else {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
+	}))
+	mux.HandleFunc("/admin/orders/", middleware.AdminMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		pathParts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+		if len(pathParts) >= 4 && pathParts[len(pathParts)-1] == "status" {
+			// PUT /admin/orders/:id/status
+			if r.Method == http.MethodPut {
+				handlers.UpdateOrderStatusHandler(w, r)
+			} else {
+				http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			}
+		} else {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		}
 	}))
