@@ -11,6 +11,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -262,9 +263,21 @@ func CheckoutMpesaHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, err = database.DB.Exec(`UPDATE orders SET mpesa_checkout_request_id = $1, mpesa_merchant_request_id = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $3`,
-		stkResp.CheckoutRequestID, stkResp.MerchantRequestID, order.ID)
-	if err != nil {
+	var updateErr error
+	for attempt := 1; attempt <= 3; attempt++ {
+		_, updateErr = database.DB.Exec(`UPDATE orders SET mpesa_checkout_request_id = $1, mpesa_merchant_request_id = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $3`,
+			stkResp.CheckoutRequestID, stkResp.MerchantRequestID, order.ID)
+		if updateErr == nil {
+			break
+		}
+		if attempt < 3 {
+			time.Sleep(time.Duration(attempt) * 150 * time.Millisecond)
+		}
+	}
+	if updateErr != nil {
+		log.Printf("CRITICAL: failed to persist mpesa STK ids after retries order_id=%s checkout_request_id=%s merchant_request_id=%s err=%v",
+			order.ID, stkResp.CheckoutRequestID, stkResp.MerchantRequestID, updateErr)
+		enqueueMpesaReconciliationTask(order.ID, stkResp.CheckoutRequestID, stkResp.MerchantRequestID, updateErr)
 		utils.RespondError(w, http.StatusInternalServerError, "database_error", "Failed to save payment request")
 		return
 	}
@@ -284,6 +297,11 @@ func getEnv(key, def string) string {
 		return v
 	}
 	return def
+}
+
+func enqueueMpesaReconciliationTask(orderID uuid.UUID, checkoutRequestID, merchantRequestID string, cause error) {
+	log.Printf("CRITICAL: mpesa reconciliation queued order_id=%s checkout_request_id=%s merchant_request_id=%s cause=%v",
+		orderID, checkoutRequestID, merchantRequestID, cause)
 }
 
 func compensateFailedMpesaCheckout(orderID uuid.UUID, cartItems []checkoutCartItemInfo) error {
@@ -321,8 +339,15 @@ func MpesaSTKCallbackHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	body, err := io.ReadAll(r.Body)
+	maxBytes := int64(1 << 20) // 1 MiB
+	limitedBody := http.MaxBytesReader(w, r.Body, maxBytes)
+	body, err := io.ReadAll(limitedBody)
 	if err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			http.Error(w, "Payload Too Large", http.StatusRequestEntityTooLarge)
+			return
+		}
 		http.Error(w, "Bad Request", http.StatusBadRequest)
 		return
 	}
