@@ -31,6 +31,15 @@ type CheckoutMpesaRequest struct {
 	PhoneNumber       string    `json:"phone_number"`
 }
 
+type checkoutCartItemInfo struct {
+	ID            uuid.UUID
+	ProductID     uuid.UUID
+	Quantity      int
+	Price         float64
+	StockQuantity int
+	ProductName   string
+}
+
 // CheckoutMpesaHandler handles POST /orders/checkout-mpesa - Create order and initiate M-PESA STK Push
 func CheckoutMpesaHandler(w http.ResponseWriter, r *http.Request) {
 	user, ok := middleware.GetUserFromContext(r)
@@ -109,17 +118,9 @@ func CheckoutMpesaHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer rows.Close()
 
-	type CartItemInfo struct {
-		ID            uuid.UUID
-		ProductID     uuid.UUID
-		Quantity      int
-		Price         float64
-		StockQuantity int
-		ProductName   string
-	}
-	var cartItems []CartItemInfo
+	var cartItems []checkoutCartItemInfo
 	for rows.Next() {
-		var item CartItemInfo
+		var item checkoutCartItemInfo
 		if err := rows.Scan(&item.ID, &item.ProductID, &item.Quantity, &item.Price, &item.StockQuantity, &item.ProductName); err != nil {
 			utils.RespondError(w, http.StatusInternalServerError, "scan_error", "Failed to scan cart items")
 			return
@@ -216,6 +217,11 @@ func CheckoutMpesaHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err = tx.Commit(); err != nil {
+		utils.RespondError(w, http.StatusInternalServerError, "database_error", "Failed to commit transaction")
+		return
+	}
+
 	accountRef := order.ID.String()
 	if len(accountRef) > 12 {
 		accountRef = accountRef[:12]
@@ -240,23 +246,26 @@ func CheckoutMpesaHandler(w http.ResponseWriter, r *http.Request) {
 		TransactionDesc:   txnDesc,
 	})
 	if err != nil {
+		if restoreErr := compensateFailedMpesaCheckout(order.ID, cartItems); restoreErr != nil {
+			utils.RespondError(w, http.StatusInternalServerError, "database_error", "Failed to initiate M-PESA payment and rollback reservation: "+restoreErr.Error())
+			return
+		}
 		utils.RespondError(w, http.StatusBadGateway, "payment_provider_error", "Failed to initiate M-PESA payment: "+err.Error())
 		return
 	}
 	if stkResp.ErrorCode != "" || stkResp.ResponseCode != "0" {
+		if restoreErr := compensateFailedMpesaCheckout(order.ID, cartItems); restoreErr != nil {
+			utils.RespondError(w, http.StatusInternalServerError, "database_error", "M-PESA payment rejected and rollback reservation failed: "+restoreErr.Error())
+			return
+		}
 		utils.RespondError(w, http.StatusBadGateway, "payment_provider_error", stkResp.ErrorMessage+" ("+stkResp.ErrorCode+")")
 		return
 	}
 
-	_, err = tx.Exec(`UPDATE orders SET mpesa_checkout_request_id = $1, mpesa_merchant_request_id = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $3`,
+	_, err = database.DB.Exec(`UPDATE orders SET mpesa_checkout_request_id = $1, mpesa_merchant_request_id = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $3`,
 		stkResp.CheckoutRequestID, stkResp.MerchantRequestID, order.ID)
 	if err != nil {
 		utils.RespondError(w, http.StatusInternalServerError, "database_error", "Failed to save payment request")
-		return
-	}
-
-	if err = tx.Commit(); err != nil {
-		utils.RespondError(w, http.StatusInternalServerError, "database_error", "Failed to commit transaction")
 		return
 	}
 
@@ -275,6 +284,34 @@ func getEnv(key, def string) string {
 		return v
 	}
 	return def
+}
+
+func compensateFailedMpesaCheckout(orderID uuid.UUID, cartItems []checkoutCartItemInfo) error {
+	tx, err := database.DB.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec(
+		`UPDATE orders SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`,
+		models.OrderStatusCancelled,
+		orderID,
+	); err != nil {
+		return err
+	}
+
+	for _, item := range cartItems {
+		if _, err := tx.Exec(
+			`UPDATE products SET stock_quantity = stock_quantity + $1 WHERE id = $2`,
+			item.Quantity,
+			item.ProductID,
+		); err != nil {
+			return err
+		}
+	}
+
+	return tx.Commit()
 }
 
 // MpesaSTKCallbackHandler handles POST /webhooks/mpesa/stk - Safaricom STK Push callback

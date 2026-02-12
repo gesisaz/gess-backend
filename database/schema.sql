@@ -137,15 +137,33 @@ CREATE TABLE cart_items (
 -- Orders table
 CREATE TABLE orders (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    user_id UUID REFERENCES users(id) ON DELETE CASCADE,
     total_amount NUMERIC(10, 2) NOT NULL CHECK (total_amount >= 0),
     status order_status NOT NULL DEFAULT 'pending',
-    shipping_address_id UUID NOT NULL REFERENCES addresses(id),
+    shipping_address_id UUID REFERENCES addresses(id),
+    guest_email VARCHAR(255),
+    guest_name VARCHAR(255),
+    shipping_full_name VARCHAR(255),
+    shipping_street_address TEXT,
+    shipping_city VARCHAR(100),
+    shipping_state VARCHAR(100),
+    shipping_postal_code VARCHAR(20),
+    shipping_country VARCHAR(100),
+    shipping_phone VARCHAR(20),
+    guest_phone VARCHAR(20),
+    guest_shipping_line1 TEXT,
+    guest_shipping_line2 TEXT,
+    guest_shipping_city VARCHAR(100),
+    guest_shipping_postal_code VARCHAR(20),
+    guest_shipping_country VARCHAR(100),
     mpesa_checkout_request_id VARCHAR(255),
     mpesa_merchant_request_id VARCHAR(255),
     mpesa_receipt_number VARCHAR(50),
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT orders_owner_check CHECK (
+        (user_id IS NOT NULL) OR (guest_email IS NOT NULL)
+    )
 );
 
 -- Order items table

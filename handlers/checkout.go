@@ -261,7 +261,7 @@ func GuestCheckoutHandler(w http.ResponseWriter, r *http.Request) {
 				if err == nil && shortcode != 0 {
 					phoneUint, err := strconv.ParseUint(phone, 10, 64)
 					if err == nil {
-						amountKES := uint(math.Ceil(totalAmount))
+						amountKES := uint(math.Round(totalAmount))
 						if amountKES < 1 {
 							amountKES = 1
 						}
