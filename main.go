@@ -103,7 +103,7 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func protectedHandler(w http.ResponseWriter, r *http.Request) {
+func meHandler(w http.ResponseWriter, r *http.Request) {
 	user, ok := middleware.GetUserFromContext(r)
 	if !ok {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -238,6 +238,7 @@ func main() {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		}
 	})
+	mux.HandleFunc("/products/batch", handlers.BatchProductsHandler)
 	mux.HandleFunc("/products/", func(w http.ResponseWriter, r *http.Request) {
 		pathParts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
 		if len(pathParts) >= 3 && pathParts[len(pathParts)-1] == "reviews" {
@@ -273,7 +274,7 @@ func main() {
 	mux.HandleFunc("/brands/", handlers.GetBrandHandler)
 	
 	// User routes (authenticated)
-	mux.HandleFunc("/protected", middleware.AuthMiddleware(protectedHandler))
+	mux.HandleFunc("/me", middleware.AuthMiddleware(meHandler))
 	
 	// Cart routes (authenticated)
 	mux.HandleFunc("/cart", middleware.AuthMiddleware(func(w http.ResponseWriter, r *http.Request) {
@@ -337,6 +338,12 @@ func main() {
 		}
 	}))
 	
+	// M-PESA webhook (public, no auth - Safaricom calls this)
+	mux.HandleFunc("/webhooks/mpesa/stk", handlers.MpesaSTKCallbackHandler)
+
+	// Guest checkout (public, no auth)
+	mux.HandleFunc("/checkout/guest", handlers.GuestCheckoutHandler)
+
 	// Order routes (authenticated)
 	mux.HandleFunc("/orders", middleware.AuthMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
@@ -345,6 +352,13 @@ func main() {
 		case http.MethodPost:
 			handlers.CreateOrderHandler(w, r)
 		default:
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
+	}))
+	mux.HandleFunc("/orders/checkout-mpesa", middleware.AuthMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			handlers.CheckoutMpesaHandler(w, r)
+		} else {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		}
 	}))
@@ -472,14 +486,21 @@ func main() {
 		}
 	}))
 
-	// Configure CORS
-	allowedOrigin := os.Getenv("BASE_URL")
-	if allowedOrigin == "" {
-		allowedOrigin = "http://localhost:3000"
+	// Configure CORS - allow store frontend and admin UI origins
+	baseURL := os.Getenv("BASE_URL")
+	adminUIURL := os.Getenv("ADMIN_UI_URL")
+	allowedOrigins := []string{baseURL}
+	if allowedOrigins[0] == "" {
+		allowedOrigins[0] = "http://localhost:3000"
+	}
+	if adminUIURL != "" {
+		allowedOrigins = append(allowedOrigins, adminUIURL)
+	} else {
+		allowedOrigins = append(allowedOrigins, "http://localhost:4200")
 	}
 
 	handler := cors.New(cors.Options{
-		AllowedOrigins:   []string{allowedOrigin},
+		AllowedOrigins:   allowedOrigins,
 		AllowCredentials: true,
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
 		AllowedHeaders:   []string{"Content-Type", "Authorization"},

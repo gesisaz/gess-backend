@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"os"
+	"strings"
 
 	"github.com/golang-jwt/jwt/v5"
 )
@@ -28,17 +29,33 @@ type contextKey string
 
 const UserContextKey contextKey = "user"
 
+// getTokenFromRequest returns the JWT from Authorization: Bearer <token> or from cookie.
+func getTokenFromRequest(r *http.Request) string {
+	if ah := r.Header.Get("Authorization"); ah != "" {
+		const prefix = "Bearer "
+		if len(ah) > len(prefix) && strings.EqualFold(ah[:len(prefix)], prefix) {
+			if token := strings.TrimSpace(ah[len(prefix):]); token != "" {
+				return token
+			}
+		}
+	}
+	if c, err := r.Cookie("token"); err == nil && c.Value != "" {
+		return c.Value
+	}
+	return ""
+}
+
 // AuthMiddleware validates JWT token and adds user to context
 func AuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		cookie, err := r.Cookie("token")
-		if err != nil {
+		tokenString := getTokenFromRequest(r)
+		if tokenString == "" {
 			http.Error(w, "unauthorized: missing token", http.StatusUnauthorized)
 			return
 		}
 
 		claims := &Claims{}
-		tkn, err := jwt.ParseWithClaims(cookie.Value, claims, func(t *jwt.Token) (interface{}, error) {
+		tkn, err := jwt.ParseWithClaims(tokenString, claims, func(t *jwt.Token) (interface{}, error) {
 			return jwtKey, nil
 		})
 
@@ -54,12 +71,12 @@ func AuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 
-		// Fetch user from database to get current role
+		// Fetch user from database to get current role and verification status
 		var user models.User
-		query := `SELECT id, username, email, role, created_at, updated_at FROM users WHERE id = $1`
+		query := `SELECT id, username, email, role, email_verified_at, created_at, updated_at FROM users WHERE id = $1`
 		err = database.DB.QueryRow(query, userID).Scan(
 			&user.ID, &user.Username, &user.Email, &user.Role,
-			&user.CreatedAt, &user.UpdatedAt,
+			&user.EmailVerifiedAt, &user.CreatedAt, &user.UpdatedAt,
 		)
 		if err != nil {
 			http.Error(w, "unauthorized: user not found", http.StatusUnauthorized)

@@ -16,18 +16,24 @@ const (
 )
 
 type User struct {
-	ID           uuid.UUID `json:"id" db:"id"`
-	Username     string    `json:"username" db:"username"`
-	Email        string    `json:"email" db:"email"`
-	PasswordHash string    `json:"-" db:"password_hash"`
-	Role         UserRole  `json:"role" db:"role"`
-	CreatedAt    time.Time `json:"created_at" db:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at" db:"updated_at"`
+	ID              uuid.UUID  `json:"id" db:"id"`
+	Username        string     `json:"username" db:"username"`
+	Email           string     `json:"email" db:"email"`
+	PasswordHash    string     `json:"-" db:"password_hash"`
+	Role            UserRole   `json:"role" db:"role"`
+	EmailVerifiedAt *time.Time `json:"email_verified_at" db:"email_verified_at"`
+	CreatedAt       time.Time  `json:"created_at" db:"created_at"`
+	UpdatedAt       time.Time  `json:"updated_at" db:"updated_at"`
 }
 
 // IsAdmin checks if user has admin privileges
 func (u *User) IsAdmin() bool {
 	return u.Role == UserRoleAdmin || u.Role == UserRoleSuperAdmin
+}
+
+// IsEmailVerified returns true if the user has verified their email
+func (u *User) IsEmailVerified() bool {
+	return u.EmailVerifiedAt != nil
 }
 
 // HashPassword hashes a plain text password

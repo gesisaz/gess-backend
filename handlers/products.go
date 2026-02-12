@@ -62,6 +62,7 @@ type UpdateProductRequest struct {
 	IsParabenFree   *bool      `json:"is_paraben_free,omitempty"`
 	IsFeatured      *bool      `json:"is_featured,omitempty"`
 	ImageURL        *string    `json:"image_url,omitempty"`
+
 }
 
 // ProductListResponse represents the response for listing products
@@ -100,12 +101,12 @@ func ListProductsHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Build query
 	query := `
-		SELECT p.id, p.name, p.description, p.price, p.stock_quantity, 
-		       p.category_id, p.brand_id, p.sku, p.product_line,
-		       p.size_value, p.size_unit, p.scent, p.skin_type,
-		       p.ingredients, p.key_ingredients, p.application_area,
+		SELECT p.id, p.name, COALESCE(p.description, ''), p.selling_price, p.stock_quantity, 
+		       p.category_id, p.brand_id, COALESCE(p.sku, ''), COALESCE(p.product_line, ''),
+		       p.size_value, COALESCE(p.size_unit, ''), COALESCE(p.scent, ''), COALESCE(p.skin_type, '{}'::text[]),
+		       COALESCE(p.ingredients, ''), COALESCE(p.key_ingredients, '{}'::text[]), COALESCE(p.application_area, ''),
 		       p.is_organic, p.is_vegan, p.is_cruelty_free, p.is_paraben_free, p.is_featured,
-		       p.rating_average, p.review_count, p.image_url,
+		       p.rating_average, p.review_count, COALESCE(p.image_url, ''),
 		       p.created_at, p.updated_at,
 		       COALESCE(c.name, '') as category_name,
 		       COALESCE(b.name, '') as brand_name
@@ -141,13 +142,13 @@ func ListProductsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if minPrice != nil {
-		query += fmt.Sprintf(" AND p.price >= $%d", argCount)
+		query += fmt.Sprintf(" AND p.selling_price >= $%d", argCount)
 		args = append(args, *minPrice)
 		argCount++
 	}
 
 	if maxPrice != nil {
-		query += fmt.Sprintf(" AND p.price <= $%d", argCount)
+		query += fmt.Sprintf(" AND p.selling_price <= $%d", argCount)
 		args = append(args, *maxPrice)
 		argCount++
 	}
@@ -274,14 +275,14 @@ func GetProductHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Query product
+	// Query product (COALESCE nullable arrays so Scan succeeds)
 	query := `
-		SELECT p.id, p.name, p.description, p.price, p.stock_quantity,
-		       p.category_id, p.brand_id, p.sku, p.product_line,
-		       p.size_value, p.size_unit, p.scent, p.skin_type,
-		       p.ingredients, p.key_ingredients, p.application_area,
+		SELECT p.id, p.name, COALESCE(p.description, ''), p.selling_price, p.stock_quantity,
+		       p.category_id, p.brand_id, COALESCE(p.sku, ''), COALESCE(p.product_line, ''),
+		       p.size_value, COALESCE(p.size_unit, ''), COALESCE(p.scent, ''), COALESCE(p.skin_type, '{}'::text[]),
+		       COALESCE(p.ingredients, ''), COALESCE(p.key_ingredients, '{}'::text[]), COALESCE(p.application_area, ''),
 		       p.is_organic, p.is_vegan, p.is_cruelty_free, p.is_paraben_free, p.is_featured,
-		       p.rating_average, p.review_count, p.image_url,
+		       p.rating_average, p.review_count, COALESCE(p.image_url, ''),
 		       p.created_at, p.updated_at,
 		       COALESCE(c.name, '') as category_name,
 		       COALESCE(b.name, '') as brand_name
@@ -314,6 +315,91 @@ func GetProductHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	utils.RespondJSON(w, http.StatusOK, product)
+}
+
+const maxBatchProductIDs = 50
+
+// BatchProductsHandler handles GET /products/batch?ids=uuid,uuid,uuid - Fetch products by IDs (no auth, for guest cart).
+func BatchProductsHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	idsParam := r.URL.Query().Get("ids")
+	if idsParam == "" {
+		utils.RespondError(w, http.StatusBadRequest, "validation_error", "ids query parameter is required")
+		return
+	}
+	parts := strings.Split(idsParam, ",")
+	if len(parts) > maxBatchProductIDs {
+		utils.RespondError(w, http.StatusBadRequest, "validation_error", fmt.Sprintf("maximum %d ids allowed", maxBatchProductIDs))
+		return
+	}
+	ids := make([]uuid.UUID, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		id, err := utils.ValidateUUID(p)
+		if err != nil {
+			utils.RespondError(w, http.StatusBadRequest, "invalid_id", fmt.Sprintf("invalid uuid %q: %v", p, err))
+			return
+		}
+		ids = append(ids, id)
+	}
+	if len(ids) == 0 {
+		utils.RespondJSON(w, http.StatusOK, ProductListResponse{Products: []models.ProductWithCategory{}, Pagination: utils.PaginationMeta{Limit: 0, Offset: 0, Total: 0}})
+		return
+	}
+
+	query := `
+		SELECT p.id, p.name, COALESCE(p.description, ''), p.selling_price, p.stock_quantity,
+		       p.category_id, p.brand_id, COALESCE(p.sku, ''), COALESCE(p.product_line, ''),
+		       p.size_value, COALESCE(p.size_unit, ''), COALESCE(p.scent, ''), COALESCE(p.skin_type, '{}'::text[]),
+		       COALESCE(p.ingredients, ''), COALESCE(p.key_ingredients, '{}'::text[]), COALESCE(p.application_area, ''),
+		       p.is_organic, p.is_vegan, p.is_cruelty_free, p.is_paraben_free, p.is_featured,
+		       p.rating_average, p.review_count, COALESCE(p.image_url, ''),
+		       p.created_at, p.updated_at,
+		       COALESCE(c.name, '') as category_name,
+		       COALESCE(b.name, '') as brand_name
+		FROM products p
+		LEFT JOIN categories c ON p.category_id = c.id
+		LEFT JOIN brands b ON p.brand_id = b.id
+		WHERE p.id = ANY($1)
+	`
+	rows, err := database.DB.Query(query, pq.Array(ids))
+	if err != nil {
+		utils.RespondError(w, http.StatusInternalServerError, "database_error", "Failed to fetch products")
+		return
+	}
+	defer rows.Close()
+
+	products := []models.ProductWithCategory{}
+	for rows.Next() {
+		var product models.ProductWithCategory
+		err := rows.Scan(
+			&product.ID, &product.Name, &product.Description, &product.Price,
+			&product.StockQuantity, &product.CategoryID, &product.BrandID,
+			&product.SKU, &product.ProductLine, &product.SizeValue, &product.SizeUnit,
+			&product.Scent, &product.SkinType, &product.Ingredients, &product.KeyIngredients,
+			&product.ApplicationArea, &product.IsOrganic, &product.IsVegan,
+			&product.IsCrueltyFree, &product.IsParabenFree, &product.IsFeatured,
+			&product.RatingAverage, &product.ReviewCount, &product.ImageURL,
+			&product.CreatedAt, &product.UpdatedAt,
+			&product.CategoryName, &product.BrandName,
+		)
+		if err != nil {
+			utils.RespondError(w, http.StatusInternalServerError, "scan_error", "Failed to scan product")
+			return
+		}
+		products = append(products, product)
+	}
+
+	utils.RespondJSON(w, http.StatusOK, ProductListResponse{
+		Products:   products,
+		Pagination: utils.PaginationMeta{Limit: len(products), Offset: 0, Total: len(products)},
+	})
 }
 
 // CreateProductHandler handles POST /admin/products - Create product (Admin only)

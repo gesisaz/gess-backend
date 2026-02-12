@@ -2,12 +2,14 @@ package handlers
 
 import (
 	"auth-demo/database"
+	"auth-demo/mail"
 	"auth-demo/middleware"
 	"auth-demo/models"
 	"auth-demo/utils"
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -196,6 +198,16 @@ func CreateOrderHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Send order confirmation email (do not fail request on error)
+	var summaryParts []string
+	for _, it := range cartItems {
+		summaryParts = append(summaryParts, fmt.Sprintf("%s x %d", it.ProductName, it.Quantity))
+	}
+	summary := strings.Join(summaryParts, "\n")
+	if err := mail.SendOrderConfirmationEmail(user.Email, order.ID.String(), totalAmount, summary); err != nil {
+		log.Printf("order confirmation email failed: %v", err)
+	}
+
 	// Build response
 	response := models.OrderWithItems{
 		Order:           order,
@@ -226,9 +238,11 @@ func ListOrdersHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get orders
+	// Get orders (COALESCE nullable M-PESA strings so Scan into string succeeds)
 	query := `
-		SELECT id, user_id, total_amount, status, shipping_address_id, created_at, updated_at
+		SELECT id, user_id, total_amount, status, shipping_address_id,
+		       COALESCE(mpesa_checkout_request_id, ''), COALESCE(mpesa_merchant_request_id, ''), COALESCE(mpesa_receipt_number, ''),
+		       created_at, updated_at
 		FROM orders
 		WHERE user_id = $1
 		ORDER BY created_at DESC
@@ -247,7 +261,9 @@ func ListOrdersHandler(w http.ResponseWriter, r *http.Request) {
 		var order models.Order
 		err := rows.Scan(
 			&order.ID, &order.UserID, &order.TotalAmount, &order.Status,
-			&order.ShippingAddressID, &order.CreatedAt, &order.UpdatedAt,
+			&order.ShippingAddressID,
+			&order.MpesaCheckoutRequestID, &order.MpesaMerchantRequestID, &order.MpesaReceiptNumber,
+			&order.CreatedAt, &order.UpdatedAt,
 		)
 		if err != nil {
 			utils.RespondError(w, http.StatusInternalServerError, "scan_error", "Failed to scan orders")
@@ -287,16 +303,24 @@ func GetOrderHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Get order
+	// Get order (COALESCE nullable string columns so Scan into string succeeds)
 	var order models.Order
 	orderQuery := `
-		SELECT id, user_id, total_amount, status, shipping_address_id, created_at, updated_at
+		SELECT id, user_id, total_amount, status, shipping_address_id,
+		       COALESCE(guest_email, ''), COALESCE(guest_name, ''), COALESCE(shipping_full_name, ''), COALESCE(shipping_street_address, ''),
+		       COALESCE(shipping_city, ''), COALESCE(shipping_state, ''), COALESCE(shipping_postal_code, ''), COALESCE(shipping_country, ''), COALESCE(shipping_phone, ''),
+		       COALESCE(mpesa_checkout_request_id, ''), COALESCE(mpesa_merchant_request_id, ''), COALESCE(mpesa_receipt_number, ''),
+		       created_at, updated_at
 		FROM orders
 		WHERE id = $1 AND user_id = $2
 	`
 	err = database.DB.QueryRow(orderQuery, orderID, user.ID).Scan(
 		&order.ID, &order.UserID, &order.TotalAmount, &order.Status,
-		&order.ShippingAddressID, &order.CreatedAt, &order.UpdatedAt,
+		&order.ShippingAddressID,
+		&order.GuestEmail, &order.GuestName, &order.ShippingFullName, &order.ShippingStreetAddress,
+		&order.ShippingCity, &order.ShippingState, &order.ShippingPostalCode, &order.ShippingCountry, &order.ShippingPhone,
+		&order.MpesaCheckoutRequestID, &order.MpesaMerchantRequestID, &order.MpesaReceiptNumber,
+		&order.CreatedAt, &order.UpdatedAt,
 	)
 	if err == sql.ErrNoRows {
 		utils.RespondError(w, http.StatusNotFound, "not_found", "Order not found")
@@ -335,17 +359,28 @@ func GetOrderHandler(w http.ResponseWriter, r *http.Request) {
 		items = append(items, item)
 	}
 
-	// Get shipping address
+	// Get shipping address (from addresses table for user orders, or from inline fields for guest)
 	var address models.Address
-	addressQuery := `SELECT id, user_id, full_name, street_address, city, state, postal_code, country, phone, is_default, created_at, updated_at FROM addresses WHERE id = $1`
-	err = database.DB.QueryRow(addressQuery, order.ShippingAddressID).Scan(
-		&address.ID, &address.UserID, &address.FullName, &address.StreetAddress,
-		&address.City, &address.State, &address.PostalCode, &address.Country,
-		&address.Phone, &address.IsDefault, &address.CreatedAt, &address.UpdatedAt,
-	)
-	if err != nil {
-		utils.RespondError(w, http.StatusInternalServerError, "database_error", "Failed to fetch shipping address")
-		return
+	if order.ShippingAddressID.Valid {
+		addressQuery := `SELECT id, user_id, full_name, street_address, city, state, postal_code, country, phone, is_default, created_at, updated_at FROM addresses WHERE id = $1`
+		err = database.DB.QueryRow(addressQuery, order.ShippingAddressID.UUID).Scan(
+			&address.ID, &address.UserID, &address.FullName, &address.StreetAddress,
+			&address.City, &address.State, &address.PostalCode, &address.Country,
+			&address.Phone, &address.IsDefault, &address.CreatedAt, &address.UpdatedAt,
+		)
+		if err != nil {
+			utils.RespondError(w, http.StatusInternalServerError, "database_error", "Failed to fetch shipping address")
+			return
+		}
+	} else {
+		// Guest order: build address from inline shipping fields
+		address.FullName = order.ShippingFullName
+		address.StreetAddress = order.ShippingStreetAddress
+		address.City = order.ShippingCity
+		address.State = order.ShippingState
+		address.PostalCode = order.ShippingPostalCode
+		address.Country = order.ShippingCountry
+		address.Phone = order.ShippingPhone
 	}
 
 	response := models.OrderWithItems{
@@ -394,12 +429,13 @@ func UpdateOrderStatusHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Verify order exists
+	// Verify order exists (COALESCE nullable M-PESA strings so Scan succeeds)
 	var existingOrder models.Order
-	verifyQuery := `SELECT id, user_id, total_amount, status, shipping_address_id, created_at, updated_at FROM orders WHERE id = $1`
+	verifyQuery := `SELECT id, user_id, total_amount, status, shipping_address_id, COALESCE(mpesa_checkout_request_id, ''), COALESCE(mpesa_merchant_request_id, ''), COALESCE(mpesa_receipt_number, ''), created_at, updated_at FROM orders WHERE id = $1`
 	err = database.DB.QueryRow(verifyQuery, orderID).Scan(
 		&existingOrder.ID, &existingOrder.UserID, &existingOrder.TotalAmount, &existingOrder.Status,
-		&existingOrder.ShippingAddressID, &existingOrder.CreatedAt, &existingOrder.UpdatedAt,
+		&existingOrder.ShippingAddressID, &existingOrder.MpesaCheckoutRequestID, &existingOrder.MpesaMerchantRequestID, &existingOrder.MpesaReceiptNumber,
+		&existingOrder.CreatedAt, &existingOrder.UpdatedAt,
 	)
 	if err == sql.ErrNoRows {
 		utils.RespondError(w, http.StatusNotFound, "not_found", "Order not found")
@@ -410,17 +446,18 @@ func UpdateOrderStatusHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Update order status
+	// Update order status (COALESCE nullable M-PESA strings in RETURNING so Scan succeeds)
 	updateQuery := `
 		UPDATE orders 
 		SET status = $1, updated_at = CURRENT_TIMESTAMP 
 		WHERE id = $2
-		RETURNING id, user_id, total_amount, status, shipping_address_id, created_at, updated_at
+		RETURNING id, user_id, total_amount, status, shipping_address_id, COALESCE(mpesa_checkout_request_id, ''), COALESCE(mpesa_merchant_request_id, ''), COALESCE(mpesa_receipt_number, ''), created_at, updated_at
 	`
 	var order models.Order
 	err = database.DB.QueryRow(updateQuery, req.Status, orderID).Scan(
 		&order.ID, &order.UserID, &order.TotalAmount, &order.Status,
-		&order.ShippingAddressID, &order.CreatedAt, &order.UpdatedAt,
+		&order.ShippingAddressID, &order.MpesaCheckoutRequestID, &order.MpesaMerchantRequestID, &order.MpesaReceiptNumber,
+		&order.CreatedAt, &order.UpdatedAt,
 	)
 	if err != nil {
 		utils.RespondError(w, http.StatusInternalServerError, "database_error", "Failed to update order status")
@@ -441,8 +478,8 @@ func ListAllOrdersHandler(w http.ResponseWriter, r *http.Request) {
 	startDateFilter := r.URL.Query().Get("start_date")
 	endDateFilter := r.URL.Query().Get("end_date")
 
-	// Build query
-	query := `SELECT id, user_id, total_amount, status, shipping_address_id, created_at, updated_at FROM orders WHERE 1=1`
+	// Build query (COALESCE nullable M-PESA strings so Scan into string succeeds)
+	query := `SELECT id, user_id, total_amount, status, shipping_address_id, COALESCE(mpesa_checkout_request_id, '') as mpesa_checkout_request_id, COALESCE(mpesa_merchant_request_id, '') as mpesa_merchant_request_id, COALESCE(mpesa_receipt_number, '') as mpesa_receipt_number, created_at, updated_at FROM orders WHERE 1=1`
 	countQuery := `SELECT COUNT(*) FROM orders WHERE 1=1`
 	args := []interface{}{}
 	countArgs := []interface{}{}
@@ -514,7 +551,9 @@ func ListAllOrdersHandler(w http.ResponseWriter, r *http.Request) {
 		var order models.Order
 		err := rows.Scan(
 			&order.ID, &order.UserID, &order.TotalAmount, &order.Status,
-			&order.ShippingAddressID, &order.CreatedAt, &order.UpdatedAt,
+			&order.ShippingAddressID,
+			&order.MpesaCheckoutRequestID, &order.MpesaMerchantRequestID, &order.MpesaReceiptNumber,
+			&order.CreatedAt, &order.UpdatedAt,
 		)
 		if err != nil {
 			utils.RespondError(w, http.StatusInternalServerError, "scan_error", "Failed to scan orders")

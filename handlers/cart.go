@@ -60,7 +60,7 @@ func GetCartHandler(w http.ResponseWriter, r *http.Request) {
 	itemsQuery := `
 		SELECT 
 			ci.id, ci.cart_id, ci.product_id, ci.quantity, ci.created_at, ci.updated_at,
-			p.name as product_name, p.price as product_price, p.image_url as product_image
+			p.name as product_name, p.selling_price as product_price, p.image_url as product_image
 		FROM cart_items ci
 		JOIN products p ON ci.product_id = p.id
 		WHERE ci.cart_id = $1
@@ -124,7 +124,7 @@ func AddCartItemHandler(w http.ResponseWriter, r *http.Request) {
 	// Check if product exists and has stock
 	var productPrice float64
 	var stockQuantity int
-	productQuery := `SELECT price, stock_quantity FROM products WHERE id = $1`
+	productQuery := `SELECT selling_price, stock_quantity FROM products WHERE id = $1`
 	err := database.DB.QueryRow(productQuery, req.ProductID).Scan(&productPrice, &stockQuantity)
 	if err == sql.ErrNoRows {
 		utils.RespondError(w, http.StatusNotFound, "not_found", "Product not found")

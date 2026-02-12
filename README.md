@@ -1,4 +1,4 @@
-# E-Commerce Backend - Setup Guide
+# Gess Backend - Setup Guide
 
 ## Prerequisites
 
@@ -47,6 +47,11 @@ Or if using default postgres user:
 psql -d ecommerce_db -f database/schema.sql
 ```
 
+**Existing databases:** To add M-PESA columns to an already-created schema, run:
+```bash
+psql -U ecommerce_user -d ecommerce_db -f database/migrations/002_mpesa_orders.sql
+```
+
 ## Application Setup
 
 ### 1. Install Dependencies
@@ -62,21 +67,31 @@ This will download:
 - `golang.org/x/crypto` - Password hashing (bcrypt)
 - `github.com/golang-jwt/jwt/v5` - JWT authentication
 - `github.com/rs/cors` - CORS middleware
+- `github.com/jwambugu/mpesa-golang-sdk` - M-PESA Daraja (STK Push) integration
 
 ### 2. Configure Environment Variables
 
 Create a `.env` file in the backend directory or export these variables:
 
 ```bash
-# Database connection
 export DATABASE_URL="postgres://ecommerce_user:your_secure_password@localhost:5432/ecommerce_db?sslmode=disable"
 
-# Frontend URL for CORS
 export BASE_URL="http://localhost:3000"
 
-# Server port (optional, defaults to 8080)
+export ADMIN_UI_URL="http://localhost:4200"
+
 export PORT="8080"
+
+# M-PESA (Safaricom Daraja) - optional; omit to disable M-PESA checkout
+export MPESA_CONSUMER_KEY="your_consumer_key"
+export MPESA_CONSUMER_SECRET="your_consumer_secret"
+export MPESA_PASSKEY="your_passkey"
+export MPESA_SHORTCODE="174379"
+export MPESA_CALLBACK_BASE_URL="https://your-api.example.com"
+export MPESA_ENV="sandbox"
 ```
+
+**M-PESA checkout:** Get credentials from the [Safaricom Daraja](https://developer.safaricom.co.ke) portal. Use `MPESA_ENV=sandbox` for testing. The callback URL must be publicly reachable over HTTPS in production (`MPESA_CALLBACK_BASE_URL` + `/webhooks/mpesa/stk`). If any M-PESA variable is missing, checkout via M-PESA is disabled.
 
 **Alternative DATABASE_URL formats:**
 
@@ -92,11 +107,14 @@ DATABASE_URL="postgres://username:password@host:5432/dbname?sslmode=require"
 
 ### 3. Run the Server
 
+Load environment variables and start the server:
+
 ```bash
-go run main.go
+source .env.sh   # or: set -a && source .env.sh && set +a
+go run .
 ```
 
-The server will start on `http://localhost:8080`
+The server will start on `http://localhost:8080`. Ensure `ADMIN_UI_URL` is set in `.env.sh` (or equivalent) so the admin dashboard at `http://localhost:4200` can make API requests. If `ADMIN_UI_URL` is not set, the server falls back to allowing `http://localhost:4200` for development.
 
 ## API Endpoints
 
@@ -131,11 +149,32 @@ Response includes a JWT token in both the response body and an HTTP-only cookie.
 POST /logout
 ```
 
-#### Protected Route (Example)
+#### Current user
 ```bash
-GET /protected
+GET /me
 Cookie: token=<jwt_token>
 ```
+
+### M-PESA Checkout (Lipa Na M-Pesa Online)
+
+Checkout with M-PESA: the client sends address and phone; the backend creates the order, deducts stock, clears the cart, and initiates an STK push. The customer enters their M-PESA PIN on their phone. Safaricom sends a callback to your server; on success the order moves to `processing`, on cancel/timeout the order is `cancelled` and stock is restored.
+
+#### Initiate M-PESA checkout
+```bash
+POST /orders/checkout-mpesa
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{
+  "shipping_address_id": "uuid-of-address",
+  "phone_number": "254712345678"
+}
+```
+
+Response (201): order object plus `checkout_request_id` and message "Complete payment on your phone". The client can poll `GET /orders/:id` to see when `status` becomes `processing` and `mpesa_receipt_number` is set.
+
+#### Webhook (Safaricom only)
+`POST /webhooks/mpesa/stk` – no auth; receives STK push result from Safaricom. Must be HTTPS in production.
 
 ## Database Schema
 
@@ -277,6 +316,3 @@ GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO ecommerce_user;
 10. Add logging and monitoring
 
 ## License
-
-This is a demo project for learning purposes.
-
