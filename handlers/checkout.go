@@ -253,48 +253,50 @@ func GuestCheckoutHandler(w http.ResponseWriter, r *http.Request) {
 	if mpesa.Enabled() && strings.TrimSpace(addr.Phone) != "" {
 		phone := utils.NormalizeMpesaPhone(addr.Phone)
 		if phone != "" {
-			shortcodeStr := os.Getenv("MPESA_SHORTCODE")
+			shortcodeStr := strings.TrimSpace(strings.TrimPrefix(getEnv("MPESA_SHORTCODE", "174379"), "0"))
 			passkey := os.Getenv("MPESA_PASSKEY")
 			callbackBase := os.Getenv("MPESA_CALLBACK_BASE_URL")
 			if shortcodeStr != "" && passkey != "" && callbackBase != "" {
 				shortcode, err := strconv.ParseUint(shortcodeStr, 10, 64)
-				if err == nil && shortcode != 0 {
-					phoneUint, err := strconv.ParseUint(phone, 10, 64)
-					if err == nil {
-						amountKES := uint(math.Round(totalAmount))
-						if amountKES < 1 {
-							amountKES = 1
-						}
-						callbackURL := strings.TrimSuffix(callbackBase, "/") + "/webhooks/mpesa/stk"
-						accountRef := order.ID.String()
-						if len(accountRef) > 12 {
-							accountRef = accountRef[:12]
-						}
-						txnDesc := "Order payment"
-						if len(txnDesc) > 13 {
-							txnDesc = txnDesc[:13]
-						}
-						ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
-						stkResp, err := mpesa.Client().STKPush(ctx, passkey, mpesasdk.STKPushRequest{
-							BusinessShortCode: uint(shortcode),
-							TransactionType:   mpesasdk.CustomerPayBillOnlineTransactionType,
-							Amount:            amountKES,
-							PartyA:            uint(phoneUint),
-							PartyB:            uint(shortcode),
-							PhoneNumber:       phoneUint,
-							CallBackURL:       callbackURL,
-							AccountReference:  accountRef,
-							TransactionDesc:   txnDesc,
-						})
-						cancel()
-						if err == nil && stkResp.ErrorCode == "" && stkResp.ResponseCode == "0" {
-							_, _ = database.DB.Exec(`UPDATE orders SET mpesa_checkout_request_id = $1, mpesa_merchant_request_id = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $3`,
-								stkResp.CheckoutRequestID, stkResp.MerchantRequestID, order.ID)
-							order.MpesaCheckoutRequestID = stkResp.CheckoutRequestID
-							order.MpesaMerchantRequestID = stkResp.MerchantRequestID
-							stkSent = true
-							msg = "Complete payment on your phone"
-						}
+				if err != nil || shortcode == 0 {
+					utils.RespondError(w, http.StatusInternalServerError, "config_error", "Invalid MPESA_SHORTCODE")
+					return
+				}
+				phoneUint, err := strconv.ParseUint(phone, 10, 64)
+				if err == nil {
+					amountKES := uint(math.Round(totalAmount))
+					if amountKES < 1 {
+						amountKES = 1
+					}
+					callbackURL := strings.TrimSuffix(callbackBase, "/") + "/webhooks/mpesa/stk"
+					accountRef := order.ID.String()
+					if len(accountRef) > 12 {
+						accountRef = accountRef[:12]
+					}
+					txnDesc := "Order payment"
+					if len(txnDesc) > 13 {
+						txnDesc = txnDesc[:13]
+					}
+					ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+					stkResp, err := mpesa.Client().STKPush(ctx, passkey, mpesasdk.STKPushRequest{
+						BusinessShortCode: uint(shortcode),
+						TransactionType:   mpesasdk.CustomerPayBillOnlineTransactionType,
+						Amount:            amountKES,
+						PartyA:            uint(phoneUint),
+						PartyB:            uint(shortcode),
+						PhoneNumber:       phoneUint,
+						CallBackURL:       callbackURL,
+						AccountReference:  accountRef,
+						TransactionDesc:   txnDesc,
+					})
+					cancel()
+					if err == nil && stkResp.ErrorCode == "" && stkResp.ResponseCode == "0" {
+						_, _ = database.DB.Exec(`UPDATE orders SET mpesa_checkout_request_id = $1, mpesa_merchant_request_id = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $3`,
+							stkResp.CheckoutRequestID, stkResp.MerchantRequestID, order.ID)
+						order.MpesaCheckoutRequestID = stkResp.CheckoutRequestID
+						order.MpesaMerchantRequestID = stkResp.MerchantRequestID
+						stkSent = true
+						msg = "Complete payment on your phone"
 					}
 				}
 			}

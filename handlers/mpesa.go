@@ -419,22 +419,49 @@ func MpesaSTKCallbackHandler(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	} else {
-		_, err = database.DB.Exec(`UPDATE orders SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`, models.OrderStatusCancelled, orderID)
+		tx, err := database.DB.Begin()
 		if err != nil {
 			respondMpesaCallback(w, 0, "Accepted")
 			return
 		}
-		// Restore stock
-		rows, err := database.DB.Query(`SELECT product_id, quantity FROM order_items WHERE order_id = $1`, orderID)
-		if err == nil {
-			for rows.Next() {
-				var productID uuid.UUID
-				var qty int
-				if rows.Scan(&productID, &qty) == nil {
-					database.DB.Exec(`UPDATE products SET stock_quantity = stock_quantity + $1 WHERE id = $2`, qty, productID)
-				}
+		defer tx.Rollback()
+
+		_, err = tx.Exec(`UPDATE orders SET status = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`, models.OrderStatusCancelled, orderID)
+		if err != nil {
+			respondMpesaCallback(w, 0, "Accepted")
+			return
+		}
+
+		rows, err := tx.Query(`SELECT product_id, quantity FROM order_items WHERE order_id = $1 FOR UPDATE`, orderID)
+		if err != nil {
+			respondMpesaCallback(w, 0, "Accepted")
+			return
+		}
+
+		for rows.Next() {
+			var productID uuid.UUID
+			var qty int
+			if err := rows.Scan(&productID, &qty); err != nil {
+				rows.Close()
+				respondMpesaCallback(w, 0, "Accepted")
+				return
 			}
+			if _, err := tx.Exec(`UPDATE products SET stock_quantity = stock_quantity + $1 WHERE id = $2`, qty, productID); err != nil {
+				rows.Close()
+				respondMpesaCallback(w, 0, "Accepted")
+				return
+			}
+		}
+		if err := rows.Err(); err != nil {
 			rows.Close()
+			respondMpesaCallback(w, 0, "Accepted")
+			return
+		}
+		rows.Close()
+
+		if err := tx.Commit(); err != nil {
+			respondMpesaCallback(w, 0, "Accepted")
+			return
 		}
 	}
 
