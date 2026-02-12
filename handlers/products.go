@@ -62,7 +62,6 @@ type UpdateProductRequest struct {
 	IsParabenFree   *bool      `json:"is_paraben_free,omitempty"`
 	IsFeatured      *bool      `json:"is_featured,omitempty"`
 	ImageURL        *string    `json:"image_url,omitempty"`
-
 }
 
 // ProductListResponse represents the response for listing products
@@ -101,7 +100,7 @@ func ListProductsHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Build query
 	query := `
-		SELECT p.id, p.name, COALESCE(p.description, ''), p.selling_price, p.stock_quantity, 
+		SELECT p.id, p.name, COALESCE(p.description, ''), p.price, p.stock_quantity, 
 		       p.category_id, p.brand_id, COALESCE(p.sku, ''), COALESCE(p.product_line, ''),
 		       p.size_value, COALESCE(p.size_unit, ''), COALESCE(p.scent, ''), COALESCE(p.skin_type, '{}'::text[]),
 		       COALESCE(p.ingredients, ''), COALESCE(p.key_ingredients, '{}'::text[]), COALESCE(p.application_area, ''),
@@ -142,13 +141,13 @@ func ListProductsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if minPrice != nil {
-		query += fmt.Sprintf(" AND p.selling_price >= $%d", argCount)
+		query += fmt.Sprintf(" AND p.price >= $%d", argCount)
 		args = append(args, *minPrice)
 		argCount++
 	}
 
 	if maxPrice != nil {
-		query += fmt.Sprintf(" AND p.selling_price <= $%d", argCount)
+		query += fmt.Sprintf(" AND p.price <= $%d", argCount)
 		args = append(args, *maxPrice)
 		argCount++
 	}
@@ -277,7 +276,7 @@ func GetProductHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Query product (COALESCE nullable arrays so Scan succeeds)
 	query := `
-		SELECT p.id, p.name, COALESCE(p.description, ''), p.selling_price, p.stock_quantity,
+		SELECT p.id, p.name, COALESCE(p.description, ''), p.price, p.stock_quantity,
 		       p.category_id, p.brand_id, COALESCE(p.sku, ''), COALESCE(p.product_line, ''),
 		       p.size_value, COALESCE(p.size_unit, ''), COALESCE(p.scent, ''), COALESCE(p.skin_type, '{}'::text[]),
 		       COALESCE(p.ingredients, ''), COALESCE(p.key_ingredients, '{}'::text[]), COALESCE(p.application_area, ''),
@@ -354,7 +353,7 @@ func BatchProductsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	query := `
-		SELECT p.id, p.name, COALESCE(p.description, ''), p.selling_price, p.stock_quantity,
+		SELECT p.id, p.name, COALESCE(p.description, ''), p.price, p.stock_quantity,
 		       p.category_id, p.brand_id, COALESCE(p.sku, ''), COALESCE(p.product_line, ''),
 		       p.size_value, COALESCE(p.size_unit, ''), COALESCE(p.scent, ''), COALESCE(p.skin_type, '{}'::text[]),
 		       COALESCE(p.ingredients, ''), COALESCE(p.key_ingredients, '{}'::text[]), COALESCE(p.application_area, ''),
@@ -536,7 +535,11 @@ func UpdateProductHandler(w http.ResponseWriter, r *http.Request) {
 	// Check if product exists
 	var exists bool
 	err = database.DB.QueryRow("SELECT EXISTS(SELECT 1 FROM products WHERE id = $1)", id).Scan(&exists)
-	if err != nil || !exists {
+	if err != nil {
+		utils.RespondError(w, http.StatusInternalServerError, "database_error", "Failed to verify product")
+		return
+	}
+	if !exists {
 		utils.RespondError(w, http.StatusNotFound, "not_found", "Product not found")
 		return
 	}
@@ -595,6 +598,10 @@ func UpdateProductHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if req.SKU != nil {
+		if err := utils.ValidateSKU(*req.SKU); err != nil {
+			utils.RespondError(w, http.StatusBadRequest, "validation_error", err.Error())
+			return
+		}
 		setClauses = append(setClauses, fmt.Sprintf("sku = $%d", argCount))
 		args = append(args, *req.SKU)
 		argCount++
@@ -764,7 +771,11 @@ func DeleteProductHandler(w http.ResponseWriter, r *http.Request) {
 	// Check if product exists
 	var exists bool
 	err = database.DB.QueryRow("SELECT EXISTS(SELECT 1 FROM products WHERE id = $1)", id).Scan(&exists)
-	if err != nil || !exists {
+	if err != nil {
+		utils.RespondError(w, http.StatusInternalServerError, "database_error", "Failed to verify product")
+		return
+	}
+	if !exists {
 		utils.RespondError(w, http.StatusNotFound, "not_found", "Product not found")
 		return
 	}

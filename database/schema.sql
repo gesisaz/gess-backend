@@ -360,5 +360,5 @@ INSERT INTO products (
 );
 
 INSERT INTO users (username, email, password_hash, role) VALUES
-    ('caroline', 'caroline@example.com', 'caroline123!', 'admin'),
-    ('moseti', 'moseti@gess.com', 'gess123!', 'user');
+    ('caroline', 'caroline@example.com', '$2y$10$CPtXXlzvYy9Y0ka/WNwg2.ebBeXSM.9eDBR.j0UeFcCkOWW1qnUL2', 'admin'),
+    ('moseti', 'moseti@gess.com', '$2y$10$5dRqbiQtnm74JRO4AgSrbeQCjugH0EsFXtY4zrKeUNJF6jX8Z.th2', 'user');

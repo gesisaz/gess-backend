@@ -96,12 +96,12 @@ export MPESA_ENV="sandbox"
 **Alternative DATABASE_URL formats:**
 
 For local development:
-```
+```bash
 DATABASE_URL="postgres://username:password@localhost:5432/dbname?sslmode=disable"
 ```
 
 For production (with SSL):
-```
+```bash
 DATABASE_URL="postgres://username:password@host:5432/dbname?sslmode=require"
 ```
 
@@ -201,7 +201,7 @@ The schema includes sample categories:
 
 ## Project Structure
 
-```
+```text
 backend/
 ├── main.go              # Main application entry point
 ├── database/

@@ -13,6 +13,17 @@ ALTER TABLE orders ADD COLUMN IF NOT EXISTS shipping_postal_code VARCHAR(20);
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS shipping_country VARCHAR(100);
 ALTER TABLE orders ADD COLUMN IF NOT EXISTS shipping_phone VARCHAR(20);
 
-ALTER TABLE orders ADD CONSTRAINT orders_owner_check CHECK (
-  (user_id IS NOT NULL) OR (guest_email IS NOT NULL)
-);
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_constraint
+    WHERE conname = 'orders_owner_check'
+      AND conrelid = 'orders'::regclass
+  ) THEN
+    ALTER TABLE orders ADD CONSTRAINT orders_owner_check CHECK (
+      (user_id IS NOT NULL) OR (guest_email IS NOT NULL)
+    );
+  END IF;
+END
+$$;

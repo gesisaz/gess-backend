@@ -29,7 +29,7 @@ type UpdateOrderStatusRequest struct {
 
 // OrderListResponse represents the response for listing orders
 type OrderListResponse struct {
-	Orders     []models.Order `json:"orders"`
+	Orders     []models.Order       `json:"orders"`
 	Pagination utils.PaginationMeta `json:"pagination"`
 }
 
@@ -79,7 +79,7 @@ func CreateOrderHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Get cart items with product information
 	cartItemsQuery := `
-		SELECT ci.id, ci.product_id, ci.quantity, p.price, p.stock_quantity, p.name
+		SELECT ci.id, ci.product_id, ci.quantity, p.selling_price, p.stock_quantity, p.name
 		FROM cart_items ci
 		JOIN products p ON ci.product_id = p.id
 		WHERE ci.cart_id = $1
@@ -92,12 +92,12 @@ func CreateOrderHandler(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 
 	type CartItemInfo struct {
-		ID           uuid.UUID
-		ProductID    uuid.UUID
-		Quantity     int
-		Price        float64
+		ID            uuid.UUID
+		ProductID     uuid.UUID
+		Quantity      int
+		Price         float64
 		StockQuantity int
-		ProductName  string
+		ProductName   string
 	}
 
 	cartItems := []CartItemInfo{}
@@ -110,6 +110,10 @@ func CreateOrderHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		cartItems = append(cartItems, item)
 	}
+	if err := rows.Err(); err != nil {
+		utils.RespondError(w, http.StatusInternalServerError, "scan_error", "Failed to iterate cart items")
+		return
+	}
 
 	if len(cartItems) == 0 {
 		utils.RespondError(w, http.StatusBadRequest, "empty_cart", "Cart is empty")
@@ -119,7 +123,7 @@ func CreateOrderHandler(w http.ResponseWriter, r *http.Request) {
 	// Validate stock availability
 	for _, item := range cartItems {
 		if item.StockQuantity < item.Quantity {
-			utils.RespondError(w, http.StatusBadRequest, "insufficient_stock", 
+			utils.RespondError(w, http.StatusBadRequest, "insufficient_stock",
 				fmt.Sprintf("Insufficient stock for product: %s (available: %d, requested: %d)", item.ProductName, item.StockQuantity, item.Quantity))
 			return
 		}
@@ -271,6 +275,10 @@ func ListOrdersHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		orders = append(orders, order)
 	}
+	if err := rows.Err(); err != nil {
+		utils.RespondError(w, http.StatusInternalServerError, "scan_error", "Failed to iterate orders")
+		return
+	}
 
 	response := OrderListResponse{
 		Orders:     orders,
@@ -357,6 +365,10 @@ func GetOrderHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		utils.RespondError(w, http.StatusInternalServerError, "scan_error", "Failed to iterate order items")
+		return
 	}
 
 	// Get shipping address (from addresses table for user orders, or from inline fields for guest)
@@ -560,6 +572,10 @@ func ListAllOrdersHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		orders = append(orders, order)
+	}
+	if err := rows.Err(); err != nil {
+		utils.RespondError(w, http.StatusInternalServerError, "scan_error", "Failed to iterate orders")
+		return
 	}
 
 	response := OrderListResponse{

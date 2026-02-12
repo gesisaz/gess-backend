@@ -87,13 +87,22 @@ func CheckoutMpesaHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Start transaction before stock validation/reservation.
+	tx, err := database.DB.BeginTx(r.Context(), nil)
+	if err != nil {
+		utils.RespondError(w, http.StatusInternalServerError, "database_error", "Failed to start transaction")
+		return
+	}
+	defer tx.Rollback()
+
 	cartItemsQuery := `
 		SELECT ci.id, ci.product_id, ci.quantity, p.selling_price, p.stock_quantity, p.name
 		FROM cart_items ci
 		JOIN products p ON ci.product_id = p.id
 		WHERE ci.cart_id = $1
+		FOR UPDATE OF p
 	`
-	rows, err := database.DB.Query(cartItemsQuery, cartID)
+	rows, err := tx.Query(cartItemsQuery, cartID)
 	if err != nil {
 		utils.RespondError(w, http.StatusInternalServerError, "database_error", "Failed to fetch cart items")
 		return
@@ -101,12 +110,12 @@ func CheckoutMpesaHandler(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 
 	type CartItemInfo struct {
-		ID             uuid.UUID
-		ProductID      uuid.UUID
-		Quantity       int
-		Price          float64
-		StockQuantity  int
-		ProductName    string
+		ID            uuid.UUID
+		ProductID     uuid.UUID
+		Quantity      int
+		Price         float64
+		StockQuantity int
+		ProductName   string
 	}
 	var cartItems []CartItemInfo
 	for rows.Next() {
@@ -117,13 +126,31 @@ func CheckoutMpesaHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		cartItems = append(cartItems, item)
 	}
+	if err := rows.Err(); err != nil {
+		utils.RespondError(w, http.StatusInternalServerError, "scan_error", "Failed to iterate cart items")
+		return
+	}
 	if len(cartItems) == 0 {
 		utils.RespondError(w, http.StatusBadRequest, "empty_cart", "Cart is empty")
 		return
 	}
 
 	for _, item := range cartItems {
-		if item.StockQuantity < item.Quantity {
+		result, err := tx.Exec(
+			`UPDATE products SET stock_quantity = stock_quantity - $1 WHERE id = $2 AND stock_quantity >= $1`,
+			item.Quantity,
+			item.ProductID,
+		)
+		if err != nil {
+			utils.RespondError(w, http.StatusInternalServerError, "database_error", "Failed to reserve stock")
+			return
+		}
+		rowsAffected, err := result.RowsAffected()
+		if err != nil {
+			utils.RespondError(w, http.StatusInternalServerError, "database_error", "Failed to verify stock reservation")
+			return
+		}
+		if rowsAffected == 0 {
 			utils.RespondError(w, http.StatusBadRequest, "insufficient_stock", "Insufficient stock for "+item.ProductName)
 			return
 		}
@@ -158,14 +185,6 @@ func CheckoutMpesaHandler(w http.ResponseWriter, r *http.Request) {
 	callbackURL := strings.TrimSuffix(callbackBase, "/") + "/webhooks/mpesa/stk"
 	passkey := getEnv("MPESA_PASSKEY", "")
 
-	// Start transaction
-	tx, err := database.DB.Begin()
-	if err != nil {
-		utils.RespondError(w, http.StatusInternalServerError, "database_error", "Failed to start transaction")
-		return
-	}
-	defer tx.Rollback()
-
 	// Create order (COALESCE nullable M-PESA strings in RETURNING so Scan succeeds)
 	var order models.Order
 	orderQuery := `
@@ -188,11 +207,6 @@ func CheckoutMpesaHandler(w http.ResponseWriter, r *http.Request) {
 			order.ID, cartItem.ProductID, cartItem.Quantity, cartItem.Price)
 		if err != nil {
 			utils.RespondError(w, http.StatusInternalServerError, "database_error", "Failed to create order item")
-			return
-		}
-		_, err = tx.Exec(`UPDATE products SET stock_quantity = stock_quantity - $1 WHERE id = $2`, cartItem.Quantity, cartItem.ProductID)
-		if err != nil {
-			utils.RespondError(w, http.StatusInternalServerError, "database_error", "Failed to update stock")
 			return
 		}
 	}
@@ -229,7 +243,7 @@ func CheckoutMpesaHandler(w http.ResponseWriter, r *http.Request) {
 		utils.RespondError(w, http.StatusBadGateway, "payment_provider_error", "Failed to initiate M-PESA payment: "+err.Error())
 		return
 	}
-	if stkResp.ErrorCode != "" && stkResp.ResponseCode != "0" {
+	if stkResp.ErrorCode != "" || stkResp.ResponseCode != "0" {
 		utils.RespondError(w, http.StatusBadGateway, "payment_provider_error", stkResp.ErrorMessage+" ("+stkResp.ErrorCode+")")
 		return
 	}
@@ -250,8 +264,8 @@ func CheckoutMpesaHandler(w http.ResponseWriter, r *http.Request) {
 	order.MpesaMerchantRequestID = stkResp.MerchantRequestID
 
 	utils.RespondJSON(w, http.StatusCreated, map[string]interface{}{
-		"message": "Complete payment on your phone",
-		"order":   order,
+		"message":             "Complete payment on your phone",
+		"order":               order,
 		"checkout_request_id": stkResp.CheckoutRequestID,
 	})
 }

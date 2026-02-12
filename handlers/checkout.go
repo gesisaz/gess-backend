@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"net"
 	"net/http"
 	"os"
 	"strconv"
@@ -24,7 +25,7 @@ import (
 
 // GuestCheckoutRequest is the body for POST /checkout/guest
 type GuestCheckoutRequest struct {
-	Items           []GuestCheckoutItem   `json:"items"`
+	Items           []GuestCheckoutItem  `json:"items"`
 	Email           string               `json:"email"`
 	GuestName       string               `json:"guest_name"`
 	ShippingAddress GuestShippingAddress `json:"shipping_address"`
@@ -36,13 +37,13 @@ type GuestCheckoutItem struct {
 }
 
 type GuestShippingAddress struct {
-	FullName       string `json:"full_name"`
-	StreetAddress  string `json:"street_address"`
-	City           string `json:"city"`
-	State          string `json:"state"`
-	PostalCode     string `json:"postal_code"`
-	Country        string `json:"country"`
-	Phone          string `json:"phone"`
+	FullName      string `json:"full_name"`
+	StreetAddress string `json:"street_address"`
+	City          string `json:"city"`
+	State         string `json:"state"`
+	PostalCode    string `json:"postal_code"`
+	Country       string `json:"country"`
+	Phone         string `json:"phone"`
 }
 
 // Simple IP rate limiter for guest checkout (in-memory, 10 per minute per IP)
@@ -77,12 +78,27 @@ func allowGuestCheckoutByIP(ip string) bool {
 
 func getClientIP(r *http.Request) string {
 	if x := r.Header.Get("X-Forwarded-For"); x != "" {
-		return x
+		parts := strings.Split(x, ",")
+		for _, part := range parts {
+			ip := strings.TrimSpace(part)
+			if ip != "" {
+				return ip
+			}
+		}
 	}
 	if x := r.Header.Get("X-Real-IP"); x != "" {
-		return x
+		if ip := strings.TrimSpace(x); ip != "" {
+			return ip
+		}
 	}
-	return r.RemoteAddr
+	remoteAddr := strings.TrimSpace(r.RemoteAddr)
+	if host, _, err := net.SplitHostPort(remoteAddr); err == nil {
+		return host
+	}
+	if idx := strings.LastIndex(remoteAddr, ":"); idx != -1 {
+		return strings.TrimSpace(remoteAddr[:idx])
+	}
+	return remoteAddr
 }
 
 // GuestCheckoutHandler handles POST /checkout/guest - Create order from guest cart (no auth).
@@ -127,6 +143,13 @@ func GuestCheckoutHandler(w http.ResponseWriter, r *http.Request) {
 		Stock     int
 	}
 	var items []itemInfo
+	tx, err := database.DB.Begin()
+	if err != nil {
+		utils.RespondError(w, http.StatusInternalServerError, "database_error", "Failed to start transaction")
+		return
+	}
+	defer tx.Rollback()
+
 	for _, line := range req.Items {
 		if line.Quantity <= 0 {
 			utils.RespondError(w, http.StatusBadRequest, "validation_error", "Quantity must be greater than 0")
@@ -140,9 +163,8 @@ func GuestCheckoutHandler(w http.ResponseWriter, r *http.Request) {
 		var price float64
 		var stock int
 		var name string
-		// Use selling_price to match products table schema
-		q := `SELECT selling_price, stock_quantity, name FROM products WHERE id = $1`
-		err = database.DB.QueryRow(q, productID).Scan(&price, &stock, &name)
+		q := `SELECT selling_price, stock_quantity, name FROM products WHERE id = $1 FOR UPDATE`
+		err = tx.QueryRow(q, productID).Scan(&price, &stock, &name)
 		if err != nil {
 			utils.RespondError(w, http.StatusNotFound, "not_found", "Product not found: "+line.ProductID)
 			return
@@ -158,13 +180,6 @@ func GuestCheckoutHandler(w http.ResponseWriter, r *http.Request) {
 	for _, it := range items {
 		totalAmount += it.Price * float64(it.Quantity)
 	}
-
-	tx, err := database.DB.Begin()
-	if err != nil {
-		utils.RespondError(w, http.StatusInternalServerError, "database_error", "Failed to start transaction")
-		return
-	}
-	defer tx.Rollback()
 
 	orderQuery := `
 		INSERT INTO orders (
@@ -211,9 +226,18 @@ func GuestCheckoutHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		orderItems = append(orderItems, orderItem)
 
-		_, err = tx.Exec(`UPDATE products SET stock_quantity = stock_quantity - $1 WHERE id = $2`, it.Quantity, it.ProductID)
+		result, err := tx.Exec(`UPDATE products SET stock_quantity = stock_quantity - $1 WHERE id = $2 AND stock_quantity >= $1`, it.Quantity, it.ProductID)
 		if err != nil {
 			utils.RespondError(w, http.StatusInternalServerError, "database_error", "Failed to update stock")
+			return
+		}
+		rowsAffected, err := result.RowsAffected()
+		if err != nil {
+			utils.RespondError(w, http.StatusInternalServerError, "database_error", "Failed to verify stock update")
+			return
+		}
+		if rowsAffected == 0 {
+			utils.RespondError(w, http.StatusBadRequest, "insufficient_stock", "Insufficient stock for product: "+it.Name)
 			return
 		}
 	}
@@ -288,13 +312,13 @@ func GuestCheckoutHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	address := models.Address{
-		FullName:       order.ShippingFullName,
-		StreetAddress:  order.ShippingStreetAddress,
-		City:           order.ShippingCity,
-		State:          order.ShippingState,
-		PostalCode:     order.ShippingPostalCode,
-		Country:        order.ShippingCountry,
-		Phone:          order.ShippingPhone,
+		FullName:      order.ShippingFullName,
+		StreetAddress: order.ShippingStreetAddress,
+		City:          order.ShippingCity,
+		State:         order.ShippingState,
+		PostalCode:    order.ShippingPostalCode,
+		Country:       order.ShippingCountry,
+		Phone:         order.ShippingPhone,
 	}
 	response := struct {
 		models.OrderWithItems
