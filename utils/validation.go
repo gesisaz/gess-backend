@@ -2,10 +2,42 @@ package utils
 
 import (
 	"fmt"
+	"net/mail"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 )
+
+const maxEmailLen = 254
+
+// ValidateEmail checks that s is a non-empty RFC 5322-style address (via net/mail)
+// with reasonable length. It rejects display-name forms ("Name <a@b.com>").
+func ValidateEmail(s string) error {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return fmt.Errorf("email is required")
+	}
+	if utf8.RuneCountInString(s) > maxEmailLen {
+		return fmt.Errorf("email is too long")
+	}
+	addr, err := mail.ParseAddress(s)
+	if err != nil {
+		return fmt.Errorf("invalid email address")
+	}
+	if addr.Name != "" {
+		return fmt.Errorf("invalid email address: use addr-spec only, not display name form")
+	}
+	at := strings.LastIndex(addr.Address, "@")
+	if at <= 0 || at == len(addr.Address)-1 {
+		return fmt.Errorf("invalid email address")
+	}
+	host := addr.Address[at+1:]
+	if !strings.Contains(host, ".") && host != "localhost" {
+		return fmt.Errorf("invalid email address")
+	}
+	return nil
+}
 
 // ValidateUUID validates a UUID string
 func ValidateUUID(uuidStr string) (uuid.UUID, error) {
