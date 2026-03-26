@@ -31,6 +31,11 @@ func (u *User) IsAdmin() bool {
 	return u.Role == UserRoleAdmin || u.Role == UserRoleSuperAdmin
 }
 
+// IsSuperAdmin checks if user has super_admin role
+func (u *User) IsSuperAdmin() bool {
+	return u.Role == UserRoleSuperAdmin
+}
+
 // IsEmailVerified returns true if the user has verified their email
 func (u *User) IsEmailVerified() bool {
 	return u.EmailVerifiedAt != nil

@@ -1,29 +1,15 @@
 package middleware
 
 import (
-	"auth-demo/database"
-	"auth-demo/models"
 	"context"
-	"encoding/json"
 	"net/http"
-	"os"
 	"strings"
 
-	"github.com/golang-jwt/jwt/v5"
+	"gess-backend/database"
+	"gess-backend/internal/jwtutil"
+	"gess-backend/models"
+	"gess-backend/utils"
 )
-
-var jwtKey = []byte(os.Getenv("JWT_SECRET"))
-
-func init() {
-	if len(jwtKey) == 0 {
-		jwtKey = []byte("supersecretkey") // fallback for demo
-	}
-}
-
-type Claims struct {
-	Username string `json:"username"`
-	jwt.RegisteredClaims
-}
 
 type contextKey string
 
@@ -50,28 +36,22 @@ func AuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		tokenString := getTokenFromRequest(r)
 		if tokenString == "" {
-			http.Error(w, "unauthorized: missing token", http.StatusUnauthorized)
+			utils.RespondError(w, http.StatusUnauthorized, "unauthorized", "Missing token")
 			return
 		}
 
-		claims := &Claims{}
-		tkn, err := jwt.ParseWithClaims(tokenString, claims, func(t *jwt.Token) (interface{}, error) {
-			return jwtKey, nil
-		})
-
-		if err != nil || !tkn.Valid {
-			http.Error(w, "unauthorized: invalid token", http.StatusUnauthorized)
+		claims, err := jwtutil.ParseToken(tokenString)
+		if err != nil {
+			utils.RespondError(w, http.StatusUnauthorized, "unauthorized", "Invalid token")
 			return
 		}
 
-		// Get user ID from claims
 		userID := claims.Subject
 		if userID == "" {
-			http.Error(w, "unauthorized: invalid token claims", http.StatusUnauthorized)
+			utils.RespondError(w, http.StatusUnauthorized, "unauthorized", "Invalid token claims")
 			return
 		}
 
-		// Fetch user from database to get current role and verification status
 		var user models.User
 		query := `SELECT id, username, email, role, email_verified_at, created_at, updated_at FROM users WHERE id = $1`
 		err = database.DB.QueryRow(query, userID).Scan(
@@ -79,11 +59,10 @@ func AuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 			&user.EmailVerifiedAt, &user.CreatedAt, &user.UpdatedAt,
 		)
 		if err != nil {
-			http.Error(w, "unauthorized: user not found", http.StatusUnauthorized)
+			utils.RespondError(w, http.StatusUnauthorized, "unauthorized", "User not found")
 			return
 		}
 
-		// Add user to request context
 		ctx := context.WithValue(r.Context(), UserContextKey, &user)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	}
@@ -94,16 +73,12 @@ func AdminMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return AuthMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		user, ok := r.Context().Value(UserContextKey).(*models.User)
 		if !ok {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			utils.RespondError(w, http.StatusUnauthorized, "unauthorized", "User not found in context")
 			return
 		}
 
 		if !user.IsAdmin() {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusForbidden)
-			json.NewEncoder(w).Encode(map[string]string{
-				"error": "forbidden: admin access required",
-			})
+			utils.RespondError(w, http.StatusForbidden, "forbidden", "Admin access required")
 			return
 		}
 

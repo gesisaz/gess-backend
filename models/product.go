@@ -43,7 +43,8 @@ type Product struct {
 	ReviewCount   int     `json:"review_count" db:"review_count"`
 
 	// Media
-	ImageURL string `json:"image_url" db:"image_url"`
+	ImageURL  string         `json:"image_url" db:"image_url"`
+	ImageURLs pq.StringArray `json:"image_urls" db:"image_urls"`
 
 	// Timestamps
 	CreatedAt time.Time `json:"created_at" db:"created_at"`
