@@ -1,9 +1,9 @@
 package handlers
 
 import (
-	"auth-demo/database"
-	"auth-demo/models"
-	"auth-demo/utils"
+	"gess-backend/database"
+	"gess-backend/models"
+	"gess-backend/utils"
 	"database/sql"
 	"encoding/json"
 	"net/http"
@@ -221,7 +221,9 @@ func GetCategoryHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Query products in this category
 	productsQuery := `
-		SELECT id, name, description, price, stock_quantity, category_id, image_url, created_at, updated_at
+		SELECT id, name, description, price, stock_quantity, category_id, image_url,
+		       COALESCE(image_urls, '{}'::text[]),
+		       created_at, updated_at
 		FROM products
 		WHERE category_id = $1
 		ORDER BY created_at DESC
@@ -240,6 +242,7 @@ func GetCategoryHandler(w http.ResponseWriter, r *http.Request) {
 		err := rows.Scan(
 			&product.ID, &product.Name, &product.Description, &product.Price,
 			&product.StockQuantity, &product.CategoryID, &product.ImageURL,
+			&product.ImageURLs,
 			&product.CreatedAt, &product.UpdatedAt,
 		)
 		if err != nil {

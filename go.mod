@@ -1,4 +1,4 @@
-module auth-demo
+module gess-backend
 
 go 1.25
 

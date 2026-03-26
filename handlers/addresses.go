@@ -1,10 +1,10 @@
 package handlers
 
 import (
-	"auth-demo/database"
-	"auth-demo/middleware"
-	"auth-demo/models"
-	"auth-demo/utils"
+	"gess-backend/database"
+	"gess-backend/middleware"
+	"gess-backend/models"
+	"gess-backend/utils"
 	"database/sql"
 	"encoding/json"
 	"fmt"

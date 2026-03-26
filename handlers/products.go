@@ -1,14 +1,15 @@
 package handlers
 
 import (
-	"auth-demo/database"
-	"auth-demo/models"
-	"auth-demo/utils"
 	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
+
+	"gess-backend/database"
+	"gess-backend/models"
+	"gess-backend/utils"
 
 	"github.com/google/uuid"
 	"github.com/lib/pq"
@@ -37,6 +38,7 @@ type CreateProductRequest struct {
 	IsParabenFree   bool       `json:"is_paraben_free"`
 	IsFeatured      bool       `json:"is_featured"`
 	ImageURL        string     `json:"image_url"`
+	ImageURLs       []string   `json:"image_urls"`
 }
 
 // UpdateProductRequest represents the request body for updating a product
@@ -62,6 +64,7 @@ type UpdateProductRequest struct {
 	IsParabenFree   *bool      `json:"is_paraben_free,omitempty"`
 	IsFeatured      *bool      `json:"is_featured,omitempty"`
 	ImageURL        *string    `json:"image_url,omitempty"`
+	ImageURLs       *[]string  `json:"image_urls,omitempty"`
 }
 
 // ProductListResponse represents the response for listing products
@@ -100,12 +103,13 @@ func ListProductsHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Build query
 	query := `
-		SELECT p.id, p.name, COALESCE(p.description, ''), p.price, p.stock_quantity, 
+		SELECT p.id, p.name, COALESCE(p.description, ''), p.selling_price, p.stock_quantity, 
 		       p.category_id, p.brand_id, COALESCE(p.sku, ''), COALESCE(p.product_line, ''),
 		       p.size_value, COALESCE(p.size_unit, ''), COALESCE(p.scent, ''), COALESCE(p.skin_type, '{}'::text[]),
 		       COALESCE(p.ingredients, ''), COALESCE(p.key_ingredients, '{}'::text[]), COALESCE(p.application_area, ''),
 		       p.is_organic, p.is_vegan, p.is_cruelty_free, p.is_paraben_free, p.is_featured,
 		       p.rating_average, p.review_count, COALESCE(p.image_url, ''),
+		       COALESCE(p.image_urls, '{}'::text[]),
 		       p.created_at, p.updated_at,
 		       COALESCE(c.name, '') as category_name,
 		       COALESCE(b.name, '') as brand_name
@@ -141,13 +145,13 @@ func ListProductsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if minPrice != nil {
-		query += fmt.Sprintf(" AND p.price >= $%d", argCount)
+		query += fmt.Sprintf(" AND p.selling_price >= $%d", argCount)
 		args = append(args, *minPrice)
 		argCount++
 	}
 
 	if maxPrice != nil {
-		query += fmt.Sprintf(" AND p.price <= $%d", argCount)
+		query += fmt.Sprintf(" AND p.selling_price <= $%d", argCount)
 		args = append(args, *maxPrice)
 		argCount++
 	}
@@ -216,7 +220,7 @@ func ListProductsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Add ordering and pagination
-	query += fmt.Sprintf(" ORDER BY p.created_at DESC LIMIT $%d OFFSET $%d", argCount, argCount+1)
+	query += fmt.Sprintf(" ORDER BY p.is_featured DESC, p.created_at LIMIT $%d OFFSET $%d", argCount, argCount+1)
 	args = append(args, pagination.Limit, pagination.Offset)
 
 	// Execute query
@@ -238,6 +242,7 @@ func ListProductsHandler(w http.ResponseWriter, r *http.Request) {
 			&p.Ingredients, &p.KeyIngredients, &p.ApplicationArea,
 			&p.IsOrganic, &p.IsVegan, &p.IsCrueltyFree, &p.IsParabenFree, &p.IsFeatured,
 			&p.RatingAverage, &p.ReviewCount, &p.ImageURL,
+			&p.ImageURLs,
 			&p.CreatedAt, &p.UpdatedAt,
 			&p.CategoryName, &p.BrandName,
 		)
@@ -276,12 +281,13 @@ func GetProductHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Query product (COALESCE nullable arrays so Scan succeeds)
 	query := `
-		SELECT p.id, p.name, COALESCE(p.description, ''), p.price, p.stock_quantity,
+		SELECT p.id, p.name, COALESCE(p.description, ''), p.selling_price, p.stock_quantity,
 		       p.category_id, p.brand_id, COALESCE(p.sku, ''), COALESCE(p.product_line, ''),
 		       p.size_value, COALESCE(p.size_unit, ''), COALESCE(p.scent, ''), COALESCE(p.skin_type, '{}'::text[]),
 		       COALESCE(p.ingredients, ''), COALESCE(p.key_ingredients, '{}'::text[]), COALESCE(p.application_area, ''),
 		       p.is_organic, p.is_vegan, p.is_cruelty_free, p.is_paraben_free, p.is_featured,
 		       p.rating_average, p.review_count, COALESCE(p.image_url, ''),
+		       COALESCE(p.image_urls, '{}'::text[]),
 		       p.created_at, p.updated_at,
 		       COALESCE(c.name, '') as category_name,
 		       COALESCE(b.name, '') as brand_name
@@ -300,6 +306,7 @@ func GetProductHandler(w http.ResponseWriter, r *http.Request) {
 		&product.ApplicationArea, &product.IsOrganic, &product.IsVegan,
 		&product.IsCrueltyFree, &product.IsParabenFree, &product.IsFeatured,
 		&product.RatingAverage, &product.ReviewCount, &product.ImageURL,
+		&product.ImageURLs,
 		&product.CreatedAt, &product.UpdatedAt,
 		&product.CategoryName, &product.BrandName,
 	)
@@ -321,7 +328,7 @@ const maxBatchProductIDs = 50
 // BatchProductsHandler handles GET /products/batch?ids=uuid,uuid,uuid - Fetch products by IDs (no auth, for guest cart).
 func BatchProductsHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		utils.RespondError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed")
 		return
 	}
 	idsParam := r.URL.Query().Get("ids")
@@ -353,12 +360,13 @@ func BatchProductsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	query := `
-		SELECT p.id, p.name, COALESCE(p.description, ''), p.price, p.stock_quantity,
+		SELECT p.id, p.name, COALESCE(p.description, ''), p.selling_price, p.stock_quantity,
 		       p.category_id, p.brand_id, COALESCE(p.sku, ''), COALESCE(p.product_line, ''),
 		       p.size_value, COALESCE(p.size_unit, ''), COALESCE(p.scent, ''), COALESCE(p.skin_type, '{}'::text[]),
 		       COALESCE(p.ingredients, ''), COALESCE(p.key_ingredients, '{}'::text[]), COALESCE(p.application_area, ''),
 		       p.is_organic, p.is_vegan, p.is_cruelty_free, p.is_paraben_free, p.is_featured,
 		       p.rating_average, p.review_count, COALESCE(p.image_url, ''),
+		       COALESCE(p.image_urls, '{}'::text[]),
 		       p.created_at, p.updated_at,
 		       COALESCE(c.name, '') as category_name,
 		       COALESCE(b.name, '') as brand_name
@@ -385,6 +393,7 @@ func BatchProductsHandler(w http.ResponseWriter, r *http.Request) {
 			&product.ApplicationArea, &product.IsOrganic, &product.IsVegan,
 			&product.IsCrueltyFree, &product.IsParabenFree, &product.IsFeatured,
 			&product.RatingAverage, &product.ReviewCount, &product.ImageURL,
+			&product.ImageURLs,
 			&product.CreatedAt, &product.UpdatedAt,
 			&product.CategoryName, &product.BrandName,
 		)
@@ -448,29 +457,45 @@ func CreateProductHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Primary image: first of image_urls if non-empty, else image_url
+	imageURLs := req.ImageURLs
+	if imageURLs == nil {
+		imageURLs = []string{}
+	}
+	primaryImage := req.ImageURL
+	if len(imageURLs) > 0 && imageURLs[0] != "" {
+		primaryImage = imageURLs[0]
+	}
+
+	// Store NULL for empty SKU so multiple products can have no SKU (unique constraint allows multiple NULLs)
+	skuArg := interface{}(req.SKU)
+	if req.SKU == "" {
+		skuArg = nil
+	}
+
 	// Insert product
 	query := `
 		INSERT INTO products (
-			name, description, price, stock_quantity,
+			name, description, buying_price, selling_price, stock_quantity,
 			category_id, brand_id, sku, product_line,
 			size_value, size_unit, scent, skin_type,
 			ingredients, key_ingredients, application_area,
 			is_organic, is_vegan, is_cruelty_free, is_paraben_free, is_featured,
-			image_url
+			image_url, image_urls
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)
 		RETURNING id, created_at, updated_at, rating_average, review_count
 	`
 
 	var product models.Product
 	err := database.DB.QueryRow(
 		query,
-		req.Name, req.Description, req.Price, req.StockQuantity,
-		req.CategoryID, req.BrandID, req.SKU, req.ProductLine,
+		req.Name, req.Description, 0, req.Price, req.StockQuantity,
+		req.CategoryID, req.BrandID, skuArg, req.ProductLine,
 		req.SizeValue, req.SizeUnit, req.Scent, pq.Array(req.SkinType),
 		req.Ingredients, pq.Array(req.KeyIngredients), req.ApplicationArea,
 		req.IsOrganic, req.IsVegan, req.IsCrueltyFree, req.IsParabenFree, req.IsFeatured,
-		req.ImageURL,
+		primaryImage, pq.Array(imageURLs),
 	).Scan(&product.ID, &product.CreatedAt, &product.UpdatedAt, &product.RatingAverage, &product.ReviewCount)
 
 	if err != nil {
@@ -503,7 +528,8 @@ func CreateProductHandler(w http.ResponseWriter, r *http.Request) {
 	product.IsCrueltyFree = req.IsCrueltyFree
 	product.IsParabenFree = req.IsParabenFree
 	product.IsFeatured = req.IsFeatured
-	product.ImageURL = req.ImageURL
+	product.ImageURL = primaryImage
+	product.ImageURLs = imageURLs
 
 	utils.RespondJSON(w, http.StatusCreated, product)
 }
@@ -570,7 +596,7 @@ func UpdateProductHandler(w http.ResponseWriter, r *http.Request) {
 			utils.RespondError(w, http.StatusBadRequest, "validation_error", err.Error())
 			return
 		}
-		setClauses = append(setClauses, fmt.Sprintf("price = $%d", argCount))
+		setClauses = append(setClauses, fmt.Sprintf("selling_price = $%d", argCount))
 		args = append(args, *req.Price)
 		argCount++
 	}
@@ -603,7 +629,11 @@ func UpdateProductHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		setClauses = append(setClauses, fmt.Sprintf("sku = $%d", argCount))
-		args = append(args, *req.SKU)
+		skuVal := interface{}(*req.SKU)
+		if *req.SKU == "" {
+			skuVal = nil
+		}
+		args = append(args, skuVal)
 		argCount++
 	}
 
@@ -703,6 +733,18 @@ func UpdateProductHandler(w http.ResponseWriter, r *http.Request) {
 		argCount++
 	}
 
+	if req.ImageURLs != nil {
+		setClauses = append(setClauses, fmt.Sprintf("image_urls = $%d", argCount))
+		args = append(args, pq.Array(*req.ImageURLs))
+		argCount++
+		// Sync primary image from first URL when image_urls is updated
+		if len(*req.ImageURLs) > 0 && (*req.ImageURLs)[0] != "" {
+			setClauses = append(setClauses, fmt.Sprintf("image_url = $%d", argCount))
+			args = append(args, (*req.ImageURLs)[0])
+			argCount++
+		}
+	}
+
 	if len(setClauses) == 0 {
 		utils.RespondError(w, http.StatusBadRequest, "validation_error", "No fields to update")
 		return
@@ -721,15 +763,17 @@ func UpdateProductHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Fetch updated product
+	// Fetch updated product (COALESCE nullable columns so Scan into string/float64 never sees NULL)
 	var product models.Product
 	err = database.DB.QueryRow(`
-		SELECT id, name, description, price, stock_quantity,
-		       category_id, brand_id, sku, product_line,
-		       size_value, size_unit, scent, skin_type,
-		       ingredients, key_ingredients, application_area,
+		SELECT id, name, COALESCE(description, ''), selling_price, stock_quantity,
+		       category_id, brand_id, COALESCE(sku, ''), COALESCE(product_line, ''),
+		       COALESCE(size_value, 0), COALESCE(size_unit, ''), COALESCE(scent, ''),
+		       COALESCE(skin_type, '{}'::text[]), COALESCE(ingredients, ''),
+		       COALESCE(key_ingredients, '{}'::text[]), COALESCE(application_area, ''),
 		       is_organic, is_vegan, is_cruelty_free, is_paraben_free, is_featured,
-		       rating_average, review_count, image_url,
+		       rating_average, review_count, COALESCE(image_url, ''),
+		       COALESCE(image_urls, '{}'::text[]),
 		       created_at, updated_at
 		FROM products WHERE id = $1
 	`, id).Scan(
@@ -740,6 +784,7 @@ func UpdateProductHandler(w http.ResponseWriter, r *http.Request) {
 		&product.ApplicationArea, &product.IsOrganic, &product.IsVegan,
 		&product.IsCrueltyFree, &product.IsParabenFree, &product.IsFeatured,
 		&product.RatingAverage, &product.ReviewCount, &product.ImageURL,
+		&product.ImageURLs,
 		&product.CreatedAt, &product.UpdatedAt,
 	)
 

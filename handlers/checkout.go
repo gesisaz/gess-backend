@@ -1,11 +1,11 @@
 package handlers
 
 import (
-	"auth-demo/database"
-	"auth-demo/mail"
-	"auth-demo/models"
-	"auth-demo/mpesa"
-	"auth-demo/utils"
+	"gess-backend/database"
+	"gess-backend/mail"
+	"gess-backend/models"
+	"gess-backend/mpesa"
+	"gess-backend/utils"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -104,7 +104,7 @@ func getClientIP(r *http.Request) string {
 // GuestCheckoutHandler handles POST /checkout/guest - Create order from guest cart (no auth).
 func GuestCheckoutHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		utils.RespondError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed")
 		return
 	}
 

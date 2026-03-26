@@ -1,12 +1,12 @@
 package handlers
 
 import (
-	"auth-demo/database"
-	"auth-demo/mail"
-	"auth-demo/middleware"
-	"auth-demo/models"
-	"auth-demo/mpesa"
-	"auth-demo/utils"
+	"gess-backend/database"
+	"gess-backend/mail"
+	"gess-backend/middleware"
+	"gess-backend/models"
+	"gess-backend/mpesa"
+	"gess-backend/utils"
 	"bytes"
 	"context"
 	"database/sql"
@@ -335,7 +335,7 @@ func compensateFailedMpesaCheckout(orderID uuid.UUID, cartItems []checkoutCartIt
 // MpesaSTKCallbackHandler handles POST /webhooks/mpesa/stk - Safaricom STK Push callback
 func MpesaSTKCallbackHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		utils.RespondError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed")
 		return
 	}
 
@@ -355,7 +355,7 @@ func MpesaSTKCallbackHandler(w http.ResponseWriter, r *http.Request) {
 
 	callback, err := mpesasdk.UnmarshalSTKPushCallback(bytes.NewReader(body))
 	if err != nil {
-		http.Error(w, "Bad Request", http.StatusBadRequest)
+		utils.RespondError(w, http.StatusBadRequest, "invalid_json", "Invalid callback body")
 		return
 	}
 	if callback == nil {

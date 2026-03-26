@@ -1,9 +1,9 @@
 package handlers
 
 import (
-	"auth-demo/database"
-	"auth-demo/models"
-	"auth-demo/utils"
+	"gess-backend/database"
+	"gess-backend/models"
+	"gess-backend/utils"
 	"database/sql"
 	"encoding/json"
 	"net/http"
@@ -128,6 +128,7 @@ func GetBrandHandler(w http.ResponseWriter, r *http.Request) {
 		       p.ingredients, p.key_ingredients, p.application_area,
 		       p.is_organic, p.is_vegan, p.is_cruelty_free, p.is_paraben_free, p.is_featured,
 		       p.rating_average, p.review_count, p.image_url,
+		       COALESCE(p.image_urls, '{}'::text[]),
 		       p.created_at, p.updated_at,
 		       COALESCE(c.name, '') as category_name
 		FROM products p
@@ -154,6 +155,7 @@ func GetBrandHandler(w http.ResponseWriter, r *http.Request) {
 			&product.ApplicationArea, &product.IsOrganic, &product.IsVegan,
 			&product.IsCrueltyFree, &product.IsParabenFree, &product.IsFeatured,
 			&product.RatingAverage, &product.ReviewCount, &product.ImageURL,
+			&product.ImageURLs,
 			&product.CreatedAt, &product.UpdatedAt, &product.CategoryName,
 		)
 		if err != nil {

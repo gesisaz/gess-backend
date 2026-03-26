@@ -1,10 +1,10 @@
 package handlers
 
 import (
-	"auth-demo/database"
-	"auth-demo/middleware"
-	"auth-demo/models"
-	"auth-demo/utils"
+	"gess-backend/database"
+	"gess-backend/middleware"
+	"gess-backend/models"
+	"gess-backend/utils"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -73,7 +73,7 @@ func CreateReviewHandler(w http.ResponseWriter, r *http.Request) {
 	var productPrice float64
 	var currentRatingAvg float64
 	var currentReviewCount int
-	productQuery := `SELECT price, rating_average, review_count FROM products WHERE id = $1`
+	productQuery := `SELECT selling_price, rating_average, review_count FROM products WHERE id = $1`
 	err = database.DB.QueryRow(productQuery, productID).Scan(&productPrice, &currentRatingAvg, &currentReviewCount)
 	if err == sql.ErrNoRows {
 		utils.RespondError(w, http.StatusNotFound, "not_found", "Product not found")
