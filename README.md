@@ -251,32 +251,18 @@ backend/
 └── README.md           # This file
 ```
 
-## Next Steps
+## Implementation status
 
-### Implement Product APIs
-Create handlers for product CRUD operations:
-- `GET /products` - List all products
-- `GET /products/:id` - Get product by ID
-- `POST /products` - Create product (admin)
-- `PUT /products/:id` - Update product (admin)
-- `DELETE /products/:id` - Delete product (admin)
+The service already exposes a full storefront and admin surface: public catalog (`/products`, `/products/batch`, product reviews), categories and brands, authenticated cart and addresses, order creation and listing, guest checkout (`POST /checkout/guest`), M-PESA checkout and webhook, user reviews, and admin CRUD for products, categories, brands, users, and orders. JWT auth and admin role checks are applied via `AuthMiddleware` and `AdminMiddleware` in [`middleware/auth.go`](middleware/auth.go). HTTP routes are registered in [`main.go`](main.go); request handlers live under [`handlers/`](handlers/).
 
-### Implement Cart APIs
-- `GET /cart` - Get user's cart
-- `POST /cart/items` - Add item to cart
-- `PUT /cart/items/:id` - Update cart item quantity
-- `DELETE /cart/items/:id` - Remove item from cart
+The **API Endpoints** section above documents authentication and M-PESA in detail; refer to `main.go` for the complete route map.
 
-### Implement Order APIs
-- `POST /orders` - Create order from cart
-- `GET /orders` - Get user's orders
-- `GET /orders/:id` - Get order details
+### Roadmap / production hardening
 
-### Add Middleware
-- Authentication middleware for protected routes
-- Admin role checking middleware
-- Request logging
-- Rate limiting
+- Broader rate limiting (today only `POST /checkout/guest` is limited per client IP in [`handlers/checkout.go`](handlers/checkout.go))
+- Structured request or access logging middleware
+- CSRF strategy for cookie-based sessions where needed
+- Expand README API documentation to cover catalog, cart, orders, and admin routes end-to-end
 
 ## Development Tips
 
@@ -352,7 +338,7 @@ These tests cover guest checkout, cart stock checks, and the M-PESA STK callback
    `UPDATE users SET role = 'admin' WHERE username = 'your_first_user';`
 3. Use strong, unique DATABASE_URL password
 4. Enable SSL for database connections (`sslmode=require`)
-5. Implement rate limiting
+5. Add broader rate limiting (guest checkout already has per-IP limiting; see [`handlers/checkout.go`](handlers/checkout.go))
 6. Add request validation
 7. Use HTTPS in production; set `COOKIE_SECURE=true` and choose `COOKIE_SAMESITE` appropriately
 8. Implement proper error handling (don't expose sensitive info)
