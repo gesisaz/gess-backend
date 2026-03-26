@@ -1,7 +1,7 @@
 package mpesa
 
 import (
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"strings"
@@ -11,11 +11,12 @@ import (
 
 var client *mpesa.Mpesa
 
-func init() {
+// Init initializes the M-PESA client from environment. Call after logger.Init().
+func Init() {
 	consumerKey := os.Getenv("MPESA_CONSUMER_KEY")
 	consumerSecret := os.Getenv("MPESA_CONSUMER_SECRET")
 	if consumerKey == "" || consumerSecret == "" {
-		log.Println("mpesa: MPESA_CONSUMER_KEY or MPESA_CONSUMER_SECRET not set; M-PESA checkout disabled")
+		slog.Info("mpesa: MPESA_CONSUMER_KEY or MPESA_CONSUMER_SECRET not set; M-PESA checkout disabled")
 		return
 	}
 
@@ -29,7 +30,7 @@ func init() {
 	if envName == "" {
 		envName = "sandbox"
 	}
-	log.Println("mpesa: M-PESA client initialized (env:", envName+")")
+	slog.Info("mpesa: M-PESA client initialized", "env", envName)
 }
 
 // Client returns the M-PESA app client, or nil if not configured.
@@ -43,4 +44,9 @@ func Enabled() bool {
 		os.Getenv("MPESA_PASSKEY") != "" &&
 		os.Getenv("MPESA_SHORTCODE") != "" &&
 		os.Getenv("MPESA_CALLBACK_BASE_URL") != ""
+}
+
+// ConsumerConfigured returns true when OAuth credentials are set (client may be used for API calls).
+func ConsumerConfigured() bool {
+	return client != nil
 }

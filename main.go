@@ -1,9 +1,10 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"strings"
@@ -13,13 +14,18 @@ import (
 	"gess-backend/handlers"
 	"gess-backend/internal/cookieopts"
 	"gess-backend/internal/jwtutil"
+	"gess-backend/internal/logger"
+	"gess-backend/internal/metrics"
 	"gess-backend/internal/secrets"
+	"gess-backend/internal/tracing"
 	"gess-backend/middleware"
 	"gess-backend/models"
+	"gess-backend/mpesa"
 	"gess-backend/utils"
 
 	"github.com/google/uuid"
 	"github.com/rs/cors"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
 
 var cookieSettings cookieopts.Settings
@@ -169,23 +175,46 @@ func registerHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
+	logger.Init()
+
+	ctx := context.Background()
+	traceShutdown := tracing.Init(ctx)
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := traceShutdown(shutdownCtx); err != nil {
+			slog.Error("tracing shutdown error", "err", err)
+		}
+	}()
+
 	if err := database.ConnectDB(); err != nil {
-		log.Fatal("Failed to connect to database:", err)
+		slog.Error("failed to connect to database", "err", err)
+		os.Exit(1)
 	}
 	defer database.Close()
 
+	mpesa.Init()
+
 	secret, err := secrets.LoadJWTSecret()
 	if err != nil {
-		log.Fatal("JWT configuration: ", err)
+		slog.Error("JWT configuration", "err", err)
+		os.Exit(1)
 	}
 	jwtutil.Init(secret)
 
 	cookieSettings, err = cookieopts.Load()
 	if err != nil {
-		log.Fatal("Cookie configuration: ", err)
+		slog.Error("cookie configuration", "err", err)
+		os.Exit(1)
 	}
 
+	metrics.RegisterIntegrationGauges()
+	metrics.StartDBPingLoop(ctx, 20*time.Second)
+
 	mux := http.NewServeMux()
+
+	// Prometheus metrics; restrict exposure at the network layer in production.
+	mux.Handle("GET /metrics", metrics.MetricsHandler())
 
 	mux.HandleFunc("/health", handlers.HealthHandler)
 	mux.HandleFunc("/ready", handlers.ReadyHandler)
@@ -451,20 +480,28 @@ func main() {
 		allowedOrigins = append(allowedOrigins, "http://localhost:4200")
 	}
 
+	core := middleware.RequestIDMiddleware(middleware.AccessLogMiddleware(mux))
+	traced := otelhttp.NewHandler(core, "gess-backend",
+		otelhttp.WithFilter(func(r *http.Request) bool {
+			return r.URL.Path != "/metrics"
+		}),
+	)
+
 	handler := cors.New(cors.Options{
 		AllowedOrigins:   allowedOrigins,
 		AllowCredentials: true,
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
-		AllowedHeaders:   []string{"Content-Type", "Authorization"},
-	}).Handler(mux)
+		AllowedHeaders:   []string{"Content-Type", "Authorization", "X-Request-ID"},
+	}).Handler(traced)
 
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
 	}
 
-	log.Printf("Server running on :%s\n", port)
+	slog.Info("server listening", "addr", ":"+port)
 	if err := http.ListenAndServe(":"+port, handler); err != nil {
-		log.Fatal("Server failed to start:", err)
+		slog.Error("server failed", "err", err)
+		os.Exit(1)
 	}
 }

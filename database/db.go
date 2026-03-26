@@ -4,7 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"time"
 
@@ -36,7 +36,7 @@ func ConnectDB() error {
 	}
 
 	DB = db
-	log.Println("Successfully connected to PostgreSQL database")
+	slog.Info("connected to PostgreSQL")
 	return nil
 }
 

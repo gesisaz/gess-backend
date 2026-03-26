@@ -129,6 +129,12 @@ go run .
 
 The server will start on `http://localhost:8080`. Ensure `ADMIN_UI_URL` is set in `.env.sh` (or equivalent) so the admin dashboard at `http://localhost:4200` can make API requests. If `ADMIN_UI_URL` is not set, the server falls back to allowing `http://localhost:4200` for development.
 
+## Observability
+
+- **Logs:** JSON lines to stdout via `log/slog`. Set `LOG_LEVEL` to `debug`, `info`, `warn`, or `error` (default `info`). Each HTTP request gets an `X-Request-ID` (echoed from the client when valid, otherwise generated); access logs include `request_id`, `method`, `path`, `route`, `status`, and `duration_ms`.
+- **Metrics:** `GET /metrics` exposes Prometheus metrics. Important series include `http_request_duration_seconds` (histogram, labels `method`, `route`, `status_class`), `db_up` (updated by a periodic PostgreSQL ping), `mail_configured`, and `mpesa_consumer_configured`. Restrict `/metrics` at the network edge in production.
+- **Tracing:** Optional OTLP/HTTP export. Set `OTEL_EXPORTER_OTLP_ENDPOINT` or `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` to enable (see [OTLP environment variables](https://opentelemetry.io/docs/specs/otel/protocol/exporter/)). Set `OTEL_SERVICE_NAME` to override the default service name `gess-backend`. If no OTLP endpoint is set, tracing export is disabled but W3C trace context propagation is still configured.
+
 ## API Endpoints
 
 ### Authentication

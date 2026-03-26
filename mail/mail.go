@@ -2,11 +2,15 @@ package mail
 
 import (
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
+	"strings"
+	"sync"
 
 	"github.com/resend/resend-go/v3"
 )
+
+var warnUnconfigured sync.Once
 
 const (
 	TokenTypeEmailVerification = "email_verification"
@@ -17,7 +21,9 @@ const (
 func getClient() *resend.Client {
 	apiKey := os.Getenv("RESEND_API_KEY")
 	if apiKey == "" {
-		log.Println("mail: RESEND_API_KEY not set; emails will not be sent")
+		warnUnconfigured.Do(func() {
+			slog.Info("mail: RESEND_API_KEY not set; emails will not be sent")
+		})
 		return nil
 	}
 	return resend.NewClient(apiKey)
@@ -101,4 +107,9 @@ func SendOrderConfirmationEmail(to, orderID string, totalAmount float64, itemsSu
 	}
 	_, err := client.Emails.Send(params)
 	return err
+}
+
+// Configured reports whether RESEND_API_KEY is set (emails can be sent).
+func Configured() bool {
+	return strings.TrimSpace(os.Getenv("RESEND_API_KEY")) != ""
 }
