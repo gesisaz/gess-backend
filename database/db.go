@@ -1,6 +1,7 @@
 package database
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"log"
@@ -44,4 +45,12 @@ func Close() error {
 		return DB.Close()
 	}
 	return nil
+}
+
+// Ping checks that the database accepts connections. Use with a deadline or timeout on ctx.
+func Ping(ctx context.Context) error {
+	if DB == nil {
+		return fmt.Errorf("database not initialized")
+	}
+	return DB.PingContext(ctx)
 }

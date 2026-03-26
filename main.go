@@ -187,6 +187,9 @@ func main() {
 
 	mux := http.NewServeMux()
 
+	mux.HandleFunc("/health", handlers.HealthHandler)
+	mux.HandleFunc("/ready", handlers.ReadyHandler)
+
 	mux.HandleFunc("/login", loginHandler)
 	mux.HandleFunc("/register", registerHandler)
 	mux.HandleFunc("/logout", logoutHandler)
