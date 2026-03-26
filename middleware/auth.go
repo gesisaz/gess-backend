@@ -13,7 +13,11 @@ import (
 
 type contextKey string
 
-const UserContextKey contextKey = "user"
+const (
+	UserContextKey      contextKey = "user"
+	loggerContextKey    contextKey = "logger"
+	requestIDContextKey contextKey = "request_id"
+)
 
 // getTokenFromRequest returns the JWT from Authorization: Bearer <token> or from cookie.
 func getTokenFromRequest(r *http.Request) string {

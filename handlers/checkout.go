@@ -3,13 +3,13 @@ package handlers
 import (
 	"gess-backend/database"
 	"gess-backend/mail"
+	"gess-backend/middleware"
 	"gess-backend/models"
 	"gess-backend/mpesa"
 	"gess-backend/utils"
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"math"
 	"net"
 	"net/http"
@@ -310,7 +310,7 @@ func GuestCheckoutHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	summary := strings.Join(summaryParts, "\n")
 	if err := mail.SendOrderConfirmationEmail(req.Email, order.ID.String(), totalAmount, summary); err != nil {
-		log.Printf("guest order confirmation email failed: %v", err)
+		middleware.LoggerFromRequest(r).WarnContext(r.Context(), "guest order confirmation email failed", "err", err)
 	}
 
 	address := models.Address{

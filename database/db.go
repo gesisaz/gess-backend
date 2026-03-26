@@ -1,9 +1,10 @@
 package database
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"time"
 
@@ -35,7 +36,7 @@ func ConnectDB() error {
 	}
 
 	DB = db
-	log.Println("Successfully connected to PostgreSQL database")
+	slog.Info("connected to PostgreSQL")
 	return nil
 }
 
@@ -44,4 +45,12 @@ func Close() error {
 		return DB.Close()
 	}
 	return nil
+}
+
+// Ping checks that the database accepts connections. Use with a deadline or timeout on ctx.
+func Ping(ctx context.Context) error {
+	if DB == nil {
+		return fmt.Errorf("database not initialized")
+	}
+	return DB.PingContext(ctx)
 }

@@ -6,7 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"log"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -16,6 +16,7 @@ import (
 	"gess-backend/database"
 	"gess-backend/handlers"
 	"gess-backend/internal/jwtutil"
+	"gess-backend/internal/logger"
 	"gess-backend/middleware"
 	"gess-backend/models"
 
@@ -23,13 +24,17 @@ import (
 )
 
 func TestMain(m *testing.M) {
+	logger.Init()
+	mpesa.Init()
 	url := os.Getenv("TEST_DATABASE_URL")
 	if url == "" {
-		log.Fatal("TEST_DATABASE_URL is required for integration tests")
+		slog.Error("TEST_DATABASE_URL is required for integration tests")
+		os.Exit(1)
 	}
 	_ = os.Setenv("DATABASE_URL", url)
 	if err := database.ConnectDB(); err != nil {
-		log.Fatal(err)
+		slog.Error("database connect failed", "err", err)
+		os.Exit(1)
 	}
 	jwtutil.Init([]byte("01234567890123456789012345678901"))
 	code := m.Run()

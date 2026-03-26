@@ -9,7 +9,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -209,7 +208,7 @@ func CreateOrderHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	summary := strings.Join(summaryParts, "\n")
 	if err := mail.SendOrderConfirmationEmail(user.Email, order.ID.String(), totalAmount, summary); err != nil {
-		log.Printf("order confirmation email failed: %v", err)
+		middleware.LoggerFromRequest(r).WarnContext(r.Context(), "order confirmation email failed", "err", err)
 	}
 
 	// Build response

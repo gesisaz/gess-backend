@@ -14,7 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"math"
 	"net/http"
 	"os"
@@ -275,9 +275,12 @@ func CheckoutMpesaHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if updateErr != nil {
-		log.Printf("CRITICAL: failed to persist mpesa STK ids after retries order_id=%s checkout_request_id=%s merchant_request_id=%s err=%v",
-			order.ID, stkResp.CheckoutRequestID, stkResp.MerchantRequestID, updateErr)
-		enqueueMpesaReconciliationTask(order.ID, stkResp.CheckoutRequestID, stkResp.MerchantRequestID, updateErr)
+		middleware.LoggerFromRequest(r).ErrorContext(r.Context(), "failed to persist mpesa STK ids after retries",
+			"order_id", order.ID,
+			"checkout_request_id", stkResp.CheckoutRequestID,
+			"merchant_request_id", stkResp.MerchantRequestID,
+			"err", updateErr)
+		enqueueMpesaReconciliationTask(r.Context(), order.ID, stkResp.CheckoutRequestID, stkResp.MerchantRequestID, updateErr)
 		utils.RespondError(w, http.StatusInternalServerError, "database_error", "Failed to save payment request")
 		return
 	}
@@ -299,9 +302,12 @@ func getEnv(key, def string) string {
 	return def
 }
 
-func enqueueMpesaReconciliationTask(orderID uuid.UUID, checkoutRequestID, merchantRequestID string, cause error) {
-	log.Printf("CRITICAL: mpesa reconciliation queued order_id=%s checkout_request_id=%s merchant_request_id=%s cause=%v",
-		orderID, checkoutRequestID, merchantRequestID, cause)
+func enqueueMpesaReconciliationTask(ctx context.Context, orderID uuid.UUID, checkoutRequestID, merchantRequestID string, cause error) {
+	slog.ErrorContext(ctx, "mpesa reconciliation queued",
+		"order_id", orderID,
+		"checkout_request_id", checkoutRequestID,
+		"merchant_request_id", merchantRequestID,
+		"cause", cause)
 }
 
 func compensateFailedMpesaCheckout(orderID uuid.UUID, cartItems []checkoutCartItemInfo) error {
@@ -439,7 +445,7 @@ func MpesaSTKCallbackHandler(w http.ResponseWriter, r *http.Request) {
 				}
 				summary := strings.Join(summaryParts, "\n")
 				if sendErr := mail.SendOrderConfirmationEmail(to, orderID.String(), totalAmount, summary); sendErr != nil {
-					log.Printf("mpesa callback order confirmation email failed: %v", sendErr)
+					middleware.LoggerFromRequest(r).WarnContext(r.Context(), "mpesa callback order confirmation email failed", "err", sendErr)
 				}
 			}
 		}
